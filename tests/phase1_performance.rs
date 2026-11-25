@@ -67,8 +67,8 @@ fn runtime_env_sets_shader_threads_and_respects_user_overrides() {
     let rt = build_runtime_env(runner, &layout, &host_env, true);
     let expected = compute_shader_compiler_threads(detect_physical_cores()).to_string();
     assert_eq!(
-        rt.env.get("DXVK_NUM_COMPILER_THREADS").map(String::as_str),
-        Some(expected.as_str())
+        rt.env.get("DXVK_CONFIG").map(String::as_str),
+        Some(format!("dxvk.numCompilerThreads = {expected}").as_str())
     );
     assert_eq!(
         rt.env.get("VKD3D_WORKER_THREADS").map(String::as_str),
@@ -82,18 +82,28 @@ fn runtime_env_sets_shader_threads_and_respects_user_overrides() {
     // Explicit per-component override wins over HYPERX_PROTON_SHADER_THREADS
     let mut custom = BTreeMap::new();
     custom.insert("HYPERX_PROTON_SHADER_THREADS".to_string(), "3".to_string());
-    custom.insert("DXVK_NUM_COMPILER_THREADS".to_string(), "5".to_string());
+    custom.insert(
+        "DXVK_CONFIG".to_string(),
+        "dxvk.numCompilerThreads = 5".to_string(),
+    );
     let rt_custom = build_runtime_env(runner, &layout, &custom, true);
     assert_eq!(
-        rt_custom
-            .env
-            .get("DXVK_NUM_COMPILER_THREADS")
-            .map(String::as_str),
-        Some("5")
+        rt_custom.env.get("DXVK_CONFIG").map(String::as_str),
+        Some("dxvk.numCompilerThreads = 5")
     );
     assert_eq!(
         rt_custom.env.get("VKD3D_WORKER_THREADS").map(String::as_str),
         Some("3")
+    );
+
+    // Preserves other DXVK_CONFIG keys while appending numCompilerThreads
+    let mut append_env = BTreeMap::new();
+    append_env.insert("HYPERX_PROTON_SHADER_THREADS".to_string(), "2".to_string());
+    append_env.insert("DXVK_CONFIG".to_string(), "dxgi.maxFrameRate = 60".to_string());
+    let rt_append = build_runtime_env(runner, &layout, &append_env, true);
+    assert_eq!(
+        rt_append.env.get("DXVK_CONFIG").map(String::as_str),
+        Some("dxgi.maxFrameRate = 60; dxvk.numCompilerThreads = 2")
     );
 }
 

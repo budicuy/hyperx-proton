@@ -87,8 +87,28 @@ pub fn build_runtime_env(
         .filter(|&n| n > 0)
         .unwrap_or_else(|| compute_shader_compiler_threads(detect_physical_cores()));
     let shader_threads_str = shader_threads.to_string();
-    env.entry("DXVK_NUM_COMPILER_THREADS".to_string())
-        .or_insert_with(|| shader_threads_str.clone());
+
+    // DXVK v3.x reads `dxvk.numCompilerThreads` from `DXVK_CONFIG` (not a standalone env var).
+    let existing_dxvk_config = host_env
+        .get("DXVK_CONFIG")
+        .map(String::as_str)
+        .unwrap_or("")
+        .trim();
+    if !existing_dxvk_config
+        .to_ascii_lowercase()
+        .contains("dxvk.numcompilerthreads")
+    {
+        let merged_dxvk_config = if existing_dxvk_config.is_empty() {
+            format!("dxvk.numCompilerThreads = {shader_threads}")
+        } else {
+            format!(
+                "{}; dxvk.numCompilerThreads = {shader_threads}",
+                existing_dxvk_config.trim_end_matches(';')
+            )
+        };
+        env.insert("DXVK_CONFIG".to_string(), merged_dxvk_config);
+    }
+
     env.entry("VKD3D_WORKER_THREADS".to_string())
         .or_insert_with(|| shader_threads_str);
     env.entry("DXVK_STATE_CACHE".to_string())
