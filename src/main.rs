@@ -1,10 +1,13 @@
 use hyperx_proton::config::{load_manifest, resolve_prefix_layout};
 use hyperx_proton::doctor::{CheckSeverity, run_doctor};
+use hyperx_proton::gpu::{choose_dxvk_backend, is_sarek_bundled, probe_primary_gpu};
 use hyperx_proton::prefix::{
-    acquire_prefix_lock, prefix_needs_wineboot, prune_foreign_runner_symlinks, sync_prefix_dlls,
+    acquire_prefix_lock, prefix_needs_wineboot, prune_foreign_runner_symlinks,
+    sync_prefix_dlls_with_options,
 };
-use hyperx_proton::runtime::{build_runtime_env, is_ntsync_available};
-use hyperx_proton::shader_warm::{collect_shader_cache_dirs, spawn_shader_cache_prewarm};
+use hyperx_proton::rules::{apply_ensure_files, evaluate_rules, load_rules, should_use_steam_shim};
+use hyperx_proton::runtime::{build_runtime_env_with_context, is_ntsync_available};
+use hyperx_proton::shader_warm::{collect_shader_cache_dirs_for_vendor, spawn_shader_cache_prewarm};
 use hyperx_proton::supervisor::wait_with_supervisor;
 use hyperx_proton::sys_tune::{DEFAULT_TIMERSLACK_NS, apply_process_tuning};
 use std::collections::BTreeMap;
@@ -56,14 +59,39 @@ fn run_launch(runner_root: &Path, wait_for_exit: bool, args: &[String]) -> Resul
     let layout = resolve_prefix_layout(compat_env.as_deref(), prefix_env.as_deref())?;
 
     let host_env: BTreeMap<String, String> = env::vars().collect();
-    let rt = build_runtime_env(runner_root, &layout, &host_env, is_ntsync_available());
+    let gpu_probe = probe_primary_gpu(&host_env);
+    let loaded_rules = load_rules(&host_env);
+    for warn in &loaded_rules.warnings {
+        eprintln!("hyperx-proton: warning: {warn}");
+    }
+    let rule_eval = evaluate_rules(&loaded_rules.rules, exe, &host_env);
+    let dxvk_sel = choose_dxvk_backend(
+        &gpu_probe,
+        host_env.get("HYPERX_PROTON_DXVK_BACKEND").map(String::as_str),
+        rule_eval.dxvk_backend,
+        is_sarek_bundled(runner_root),
+    );
+    if let Some(warn) = &dxvk_sel.warning {
+        eprintln!("hyperx-proton: warning: {warn}");
+    }
 
-    let no_tune = host_env
+    let rt = build_runtime_env_with_context(
+        runner_root,
+        &layout,
+        &host_env,
+        is_ntsync_available(),
+        &gpu_probe,
+        &rule_eval,
+    );
+
+    let no_tune = rt
+        .env
         .get("HYPERX_PROTON_NO_TUNE")
         .map(String::as_str)
         == Some("1");
     if !no_tune {
-        let timerslack_ns = host_env
+        let timerslack_ns = rt
+            .env
             .get("HYPERX_PROTON_TIMERSLACK_NS")
             .and_then(|s| s.trim().parse::<u64>().ok())
             .unwrap_or(DEFAULT_TIMERSLACK_NS);
@@ -105,60 +133,37 @@ fn run_launch(runner_root: &Path, wait_for_exit: bool, args: &[String]) -> Resul
         }
 
         // Copy DX11/DX12 (and opt-in NVAPI) DLLs AFTER wineboot so wineboot cannot
-        // overwrite them with Wine builtin stubs, and stamp version only on success.
-        let _report =
-            sync_prefix_dlls(runner_root, &layout, &manifest.version, rt.nvapi_enabled)?;
+        // overwrite them with Wine builtin stubs, and stamp version/backend only on success.
+        let _report = sync_prefix_dlls_with_options(
+            runner_root,
+            &layout,
+            &manifest.version,
+            rt.nvapi_enabled,
+            dxvk_sel.backend,
+        )?;
     }
 
-    let mut launch_env = rt.env.clone();
-    let exe_lower = exe.to_ascii_lowercase();
-    if exe_lower.contains("client-win64-shipping.exe")
-        && (exe_lower.contains("wuwa") || exe_lower.contains("wuthering"))
-    {
-        // Enable wine-cachyos built-in opaque CEF WebView fix for Wuthering Waves login
-        // (override when unset or set to launcher placeholder "0").
-        let should_set_appid = launch_env
-            .get("SteamGameId")
-            .map(|v| v.trim().is_empty() || v.trim() == "0")
-            .unwrap_or(true);
-        if should_set_appid {
-            launch_env.insert("SteamGameId".to_string(), "3513350".to_string());
-        }
-
-        // WuWa's KRSDKWebViewOSR (KRWebClient.exe) uses DirectComposition + CreateSwapChainForComposition
-        // when webAccelerated=1, which renders pure white under Wine/DXVK. Creating Kuro's built-in
-        // usebitmap.flag forces bitmap rendering for the webview only (3D game stays full DX12/DX11).
-        if let Some(exe_dir) = Path::new(exe).parent() {
-            for sdk_dir in ["KrPcSdk_Global", "KrPcSdk_CN"] {
-                let webview_dir = exe_dir
-                    .join("ThirdParty")
-                    .join(sdk_dir)
-                    .join("KRSDKRes/KRSDKWebViewOSR");
-                if webview_dir.join("KRWebClient.exe").is_file() {
-                    let flag = webview_dir.join("usebitmap.flag");
-                    if !flag.exists() {
-                        let _ = std::fs::File::create(&flag);
-                    }
-                }
-            }
-        }
+    if let Some(exe_dir) = Path::new(exe).parent() {
+        let _ = apply_ensure_files(exe_dir, &rule_eval.ensure_files);
     }
 
+    let launch_env = &rt.env;
     let no_prewarm = launch_env
         .get("HYPERX_PROTON_NO_PREWARM")
         .map(String::as_str)
         == Some("1");
     let prewarm_handle = if !no_prewarm {
-        let cache_dirs = collect_shader_cache_dirs(&layout, &launch_env, Path::new(exe).parent());
+        let cache_dirs = collect_shader_cache_dirs_for_vendor(
+            &layout,
+            launch_env,
+            Path::new(exe).parent(),
+            gpu_probe.vendor(),
+        );
         spawn_shader_cache_prewarm(cache_dirs)
     } else {
         None
     };
 
-    let disable_steam_shim = launch_env
-        .get("HYPERX_PROTON_NO_STEAM_SHIM")
-        .map(String::as_str)
-        == Some("1");
     let has_steam_shim = layout
         .wineprefix
         .join("drive_c/windows/system32/steam.exe")
@@ -170,13 +175,13 @@ fn run_launch(runner_root: &Path, wait_for_exit: bool, args: &[String]) -> Resul
         == Some("1");
 
     let mut cmd = Command::new(&rt.wine_bin);
-    if has_steam_shim && !disable_steam_shim {
+    if should_use_steam_shim(&rule_eval, launch_env, has_steam_shim) {
         cmd.arg("C:\\windows\\system32\\steam.exe");
     }
     let mut child = cmd
         .arg(exe)
         .args(exe_args)
-        .envs(&launch_env)
+        .envs(launch_env)
         .spawn()
         .map_err(|err| format!("failed to execute {}: {err}", rt.wine_bin.display()))?;
 

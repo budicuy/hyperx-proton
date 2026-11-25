@@ -325,3 +325,139 @@ fn shader_warm_collects_and_advises_mesa_cache_for_amd_and_intel() {
     assert_eq!(stats.files_advised, 2);
     assert_eq!(stats.bytes_advised, 4608);
 }
+
+use hyperx_proton::prefix::{prefix_needs_wineboot, sync_prefix_dlls_with_options};
+use std::os::unix::fs::PermissionsExt;
+use std::process::Command;
+
+#[test]
+fn prefix_switches_dxvk_backend_without_wineboot_and_removes_stale_nvapi() {
+    let tmp = tempfile::tempdir().unwrap();
+    let runner = tmp.path().join("runner");
+    let compat = tmp.path().join("SHARED");
+    let pfx = compat.join("pfx");
+    std::fs::create_dir_all(pfx.join("drive_c/windows/system32")).unwrap();
+    std::fs::write(pfx.join("system.reg"), "KEEP_SYS").unwrap();
+    std::fs::write(pfx.join("user.reg"), "KEEP_USER").unwrap();
+
+    for (rel, content) in [
+        ("files/lib/dxvk/x86_64-windows/d3d11.dll", b"STD_D3D11".as_slice()),
+        ("files/lib/dxvk/x86_64-windows/dxgi.dll", b"STD_DXGI".as_slice()),
+        ("files/lib/dxvk-sarek/x86_64-windows/d3d11.dll", b"SAREK_D3D11".as_slice()),
+        ("files/lib/dxvk-sarek/x86_64-windows/dxgi.dll", b"SAREK_DXGI".as_slice()),
+        ("files/lib/vkd3d-proton/x86_64-windows/d3d12.dll", b"VKD3D12".as_slice()),
+        ("files/lib/vkd3d-proton/x86_64-windows/d3d12core.dll", b"VKD3DCORE".as_slice()),
+        ("files/lib/nvapi/x86_64-windows/nvapi64.dll", b"NVAPI64".as_slice()),
+    ] {
+        let p = runner.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, content).unwrap();
+    }
+
+    let layout = resolve_prefix_layout(Some(&compat), None).unwrap();
+    let r1 = sync_prefix_dlls_with_options(&runner, &layout, "v1", true, DxvkBackend::Standard).unwrap();
+    assert!(r1.dlls_updated);
+    assert_eq!(std::fs::read(pfx.join("drive_c/windows/system32/d3d11.dll")).unwrap(), b"STD_D3D11");
+    assert!(pfx.join("drive_c/windows/system32/nvapi64.dll").is_file());
+
+    // Switch to Sarek & disable NVAPI (e.g. AMD/Intel): NO wineboot needed, DLLs swapped, stale nvapi64.dll deleted!
+    assert!(!prefix_needs_wineboot(&runner, &layout, "v1"));
+    let r2 = sync_prefix_dlls_with_options(&runner, &layout, "v1", false, DxvkBackend::Sarek).unwrap();
+    assert!(r2.dlls_updated);
+    assert!(!r2.needs_wineboot);
+    assert_eq!(std::fs::read(pfx.join("drive_c/windows/system32/d3d11.dll")).unwrap(), b"SAREK_D3D11");
+    assert!(!pfx.join("drive_c/windows/system32/nvapi64.dll").exists());
+    assert_eq!(std::fs::read_to_string(pfx.join(".hyperx-proton-dxvk-backend")).unwrap().trim(), "sarek");
+    assert_eq!(std::fs::read_to_string(pfx.join("user.reg")).unwrap(), "KEEP_USER");
+
+    // Repeating with same backend is idempotent
+    let r3 = sync_prefix_dlls_with_options(&runner, &layout, "v1", false, DxvkBackend::Sarek).unwrap();
+    assert!(!r3.dlls_updated);
+}
+
+#[test]
+fn cli_launches_wuwa_without_steam_shim_and_hsr_with_steam_shim_and_doctor_reports_phase2() {
+    let tmp = tempfile::tempdir().unwrap();
+    let runner = tmp.path().join("runner");
+    let compat = tmp.path().join("SHARED");
+    let log_file = tmp.path().join("calls.log");
+    let rules_dir = tmp.path().join("empty-rules");
+    std::fs::create_dir_all(&rules_dir).unwrap();
+
+    // Minimal stub runner with dxvk, dxvk-sarek, vkd3d, steam.exe shim
+    std::fs::create_dir_all(runner.join("files/bin")).unwrap();
+    std::fs::write(
+        runner.join("hyperx-native.json"),
+        r#"{"schema_version":1,"runner_mode":"native","requires_steamrt":false,"name":"HyperX-Proton","version":"v1","arch":"x86_64"}"#,
+    ).unwrap();
+    for (rel, content) in [
+        ("files/lib/dxvk/x86_64-windows/d3d11.dll", b"STD11".as_slice()),
+        ("files/lib/dxvk/x86_64-windows/dxgi.dll", b"STDX".as_slice()),
+        ("files/lib/dxvk-sarek/x86_64-windows/d3d11.dll", b"SAR11".as_slice()),
+        ("files/lib/dxvk-sarek/x86_64-windows/dxgi.dll", b"SARX".as_slice()),
+        ("files/lib/vkd3d-proton/x86_64-windows/d3d12.dll", b"V12".as_slice()),
+        ("files/lib/vkd3d-proton/x86_64-windows/d3d12core.dll", b"V12C".as_slice()),
+        ("files/lib/wine/x86_64-windows/steam.exe", b"SHIM".as_slice()),
+    ] {
+        let p = runner.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, content).unwrap();
+    }
+    let wine_stub = runner.join("files/bin/wine");
+    std::fs::write(&wine_stub, "#!/usr/bin/env bash\necho \"wine:$*\" >> \"$TEST_CALL_LOG\"\n").unwrap();
+    std::fs::set_permissions(&wine_stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let ws_stub = runner.join("files/bin/wineserver");
+    std::fs::write(&ws_stub, "#!/usr/bin/env bash\necho \"ws:$*\" >> \"$TEST_CALL_LOG\"\n").unwrap();
+    std::fs::set_permissions(&ws_stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    // WuWa fake directory with KRWebClient.exe
+    let wuwa_dir = tmp.path().join("wuwa/Client/Binaries/Win64");
+    let webview = wuwa_dir.join("ThirdParty/KrPcSdk_Global/KRSDKRes/KRSDKWebViewOSR");
+    std::fs::create_dir_all(&webview).unwrap();
+    std::fs::write(webview.join("KRWebClient.exe"), b"cef").unwrap();
+    let wuwa_exe = wuwa_dir.join("Client-Win64-Shipping.exe");
+    std::fs::write(&wuwa_exe, b"pe").unwrap();
+
+    let bin = env!("CARGO_BIN_EXE_hyperx-proton");
+    let st1 = Command::new(bin)
+        .args(["run", wuwa_exe.to_str().unwrap()])
+        .env("HYPERX_PROTON_ROOT", &runner)
+        .env("STEAM_COMPAT_DATA_PATH", &compat)
+        .env("HYPERX_PROTON_RULES_DIR", &rules_dir)
+        .env("HYPERX_PROTON_NO_GPU_PROBE", "1")
+        .env("TEST_CALL_LOG", &log_file)
+        .status()
+        .unwrap();
+    assert!(st1.success());
+    assert!(webview.join("usebitmap.flag").is_file());
+
+    // Launch HSR -> MUST prepend C:\windows\system32\steam.exe
+    let st2 = Command::new(bin)
+        .args(["run", "/tmp/HSR/StarRail.exe"])
+        .env("HYPERX_PROTON_ROOT", &runner)
+        .env("STEAM_COMPAT_DATA_PATH", &compat)
+        .env("HYPERX_PROTON_RULES_DIR", &rules_dir)
+        .env("HYPERX_PROTON_NO_GPU_PROBE", "1")
+        .env("TEST_CALL_LOG", &log_file)
+        .status()
+        .unwrap();
+    assert!(st2.success());
+
+    let log = std::fs::read_to_string(&log_file).unwrap();
+    assert!(log.contains(&format!("wine:{}", wuwa_exe.display())), "log:\n{log}");
+    assert!(!log.contains(&format!("steam.exe {}", wuwa_exe.display())), "WuWa must not use steam shim:\n{log}");
+    assert!(log.contains("wine:C:\\windows\\system32\\steam.exe /tmp/HSR/StarRail.exe"), "HSR must use steam shim:\n{log}");
+
+    // Doctor reports Phase 2 checks
+    let doc = Command::new(bin)
+        .arg("doctor")
+        .env("HYPERX_PROTON_ROOT", &runner)
+        .env("HYPERX_PROTON_RULES_DIR", &rules_dir)
+        .output()
+        .unwrap();
+    let out = String::from_utf8_lossy(&doc.stdout);
+    assert!(out.contains("gpu:vulkan"), "doctor:\n{out}");
+    assert!(out.contains("gpu:dxvk-backend"), "doctor:\n{out}");
+    assert!(out.contains("dxvk-sarek:d3d11.dll"), "doctor:\n{out}");
+    assert!(out.contains("rules:engine"), "doctor:\n{out}");
+}

@@ -1,4 +1,5 @@
 use crate::config::PrefixLayout;
+use crate::gpu::DxvkBackend;
 use crate::sys_tune::reflink_or_copy;
 use std::fs::{self, File, OpenOptions};
 use std::io;
@@ -66,15 +67,17 @@ pub struct PrefixSyncReport {
 fn target_prefix_files(
     runner_root: &Path,
     enable_nvapi: bool,
+    dxvk_backend: DxvkBackend,
 ) -> Vec<(PathBuf, &'static str, &'static str)> {
+    let dxvk_dir = runner_root.join(dxvk_backend.rel_dll_dir());
     let mut list = vec![
         (
-            runner_root.join("files/lib/dxvk/x86_64-windows/d3d11.dll"),
+            dxvk_dir.join("d3d11.dll"),
             "drive_c/windows/system32",
             "d3d11.dll",
         ),
         (
-            runner_root.join("files/lib/dxvk/x86_64-windows/dxgi.dll"),
+            dxvk_dir.join("dxgi.dll"),
             "drive_c/windows/system32",
             "dxgi.dll",
         ),
@@ -230,13 +233,14 @@ pub fn prefix_needs_wineboot(
 }
 
 /// Non-destructively syncs DX11/DX12 (and opt-in NVAPI) DLLs into `system32`
-/// and updates version stamps without touching `user.reg`, `system.reg`, or
-/// `drive_c/users/`.
-pub fn sync_prefix_dlls(
+/// for the selected [`DxvkBackend`] and updates stamps without touching
+/// `user.reg`, `system.reg`, or `drive_c/users/`.
+pub fn sync_prefix_dlls_with_options(
     runner_root: &Path,
     layout: &PrefixLayout,
     runner_version: &str,
     enable_nvapi: bool,
+    dxvk_backend: DxvkBackend,
 ) -> Result<PrefixSyncReport, String> {
     let sys32 = layout.wineprefix.join("drive_c/windows/system32");
     fs::create_dir_all(&sys32).map_err(|err| {
@@ -246,19 +250,30 @@ pub fn sync_prefix_dlls(
         )
     })?;
 
+    if !enable_nvapi {
+        remove_existing_if_present(&sys32.join("nvapi64.dll"))?;
+    }
+
     let version_stamp_path = layout.wineprefix.join(".hyperx-proton-version");
     let current_stamp = fs::read_to_string(&version_stamp_path)
         .ok()
         .map(|s| s.trim().to_string());
     let version_changed = current_stamp.as_deref() != Some(runner_version);
+
+    let backend_stamp_path = layout.wineprefix.join(".hyperx-proton-dxvk-backend");
+    let current_backend = fs::read_to_string(&backend_stamp_path)
+        .ok()
+        .map(|s| s.trim().to_string());
+    let backend_changed = current_backend.as_deref() != Some(dxvk_backend.as_str());
+
     let system_reg_missing = !layout.wineprefix.join("system.reg").is_file();
 
-    let dlls = target_prefix_files(runner_root, enable_nvapi);
+    let dlls = target_prefix_files(runner_root, enable_nvapi, dxvk_backend);
     let all_dlls_present = dlls
         .iter()
         .all(|(_, dest_dir, name)| is_regular_file(&layout.wineprefix.join(dest_dir).join(name)));
 
-    let dlls_updated = if version_changed || !all_dlls_present {
+    let dlls_updated = if version_changed || backend_changed || !all_dlls_present {
         for (src, dest_dir, name) in &dlls {
             if !src.is_file() {
                 return Err(format!("missing bundled runtime file: {}", src.display()));
@@ -282,6 +297,13 @@ pub fn sync_prefix_dlls(
             )
         })?;
 
+        fs::write(&backend_stamp_path, format!("{}\n", dxvk_backend.as_str())).map_err(|err| {
+            format!(
+                "failed to write {}: {err}",
+                backend_stamp_path.display()
+            )
+        })?;
+
         if let Some(compat) = &layout.compat_data_dir {
             let compat_version = compat.join("version");
             fs::write(&compat_version, format!("{runner_version}\n")).map_err(|err| {
@@ -301,4 +323,20 @@ pub fn sync_prefix_dlls(
         dlls_updated,
         needs_wineboot: version_changed || system_reg_missing,
     })
+}
+
+/// Backward-compatible wrapper using [`DxvkBackend::Standard`].
+pub fn sync_prefix_dlls(
+    runner_root: &Path,
+    layout: &PrefixLayout,
+    runner_version: &str,
+    enable_nvapi: bool,
+) -> Result<PrefixSyncReport, String> {
+    sync_prefix_dlls_with_options(
+        runner_root,
+        layout,
+        runner_version,
+        enable_nvapi,
+        DxvkBackend::Standard,
+    )
 }
