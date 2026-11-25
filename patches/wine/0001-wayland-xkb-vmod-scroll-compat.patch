@@ -1,0 +1,13 @@
+--- a/dlls/winewayland.drv/wayland_keyboard.c
++++ b/dlls/winewayland.drv/wayland_keyboard.c
+@@ -36,6 +36,10 @@
+ #include "wine/debug.h"
+ #include "wine/server.h"
+ 
++#ifndef XKB_VMOD_NAME_SCROLL
++#define XKB_VMOD_NAME_SCROLL "ScrollLock"
++#endif
++
+ WINE_DEFAULT_DEBUG_CHANNEL(keyboard);
+ WINE_DECLARE_DEBUG_CHANNEL(key);
+ 

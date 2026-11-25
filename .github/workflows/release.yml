@@ -72,16 +72,28 @@ jobs:
             libfreetype-dev \
             libfontconfig-dev \
             libpulse-dev \
+            libasound2-dev \
+            libpipewire-0.3-dev \
             libudev-dev \
             libusb-1.0-0-dev \
             libx11-dev \
             libxext-dev \
+            libxrandr-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxcomposite-dev \
+            libxfixes-dev \
+            libegl-dev \
+            libgl-dev \
             libwayland-dev \
             wayland-protocols \
             libxkbcommon-dev \
             libxkbregistry-dev \
             libsdl2-dev \
             libdrm-dev
+          # DXVK & VKD3D-Proton require MinGW POSIX threads (Ubuntu defaults to win32)
+          sudo update-alternatives --set x86_64-w64-mingw32-gcc /usr/bin/x86_64-w64-mingw32-gcc-posix
+          sudo update-alternatives --set x86_64-w64-mingw32-g++ /usr/bin/x86_64-w64-mingw32-g++-posix
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -90,9 +102,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/ccache
-          key: ccache-ubuntu-24.04-${{ hashFiles('versions.env', 'scripts/*.sh') }}
+          key: ccache-ubuntu-24.04-${{ hashFiles('versions.env', 'scripts/*.sh', 'patches/**/*') }}
           restore-keys: |
             ccache-ubuntu-24.04-
+          save-always: true
 
       - name: Cache Cargo target
         uses: actions/cache@v4
@@ -101,6 +114,7 @@ jobs:
           key: cargo-target-ubuntu-24.04-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
           restore-keys: |
             cargo-target-ubuntu-24.04-
+          save-always: true
 
       - name: Run Rust unit and integration tests
         run: cargo test
