@@ -16,27 +16,136 @@ pub struct RuntimeEnv {
     pub nvapi_enabled: bool,
 }
 
+/// Active Wine synchronization primitive tier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncMode {
+    Ntsync,
+    Fsync,
+    Esync,
+    Plain,
+}
+
+impl SyncMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Ntsync => "ntsync",
+            Self::Fsync => "fsync",
+            Self::Esync => "esync",
+            Self::Plain => "plain",
+        }
+    }
+}
+
 /// Returns true if `/dev/ntsync` is present and openable on the host kernel.
 pub fn is_ntsync_available() -> bool {
     File::open("/dev/ntsync").is_ok()
+}
+
+/// Returns true if the host kernel supports `futex_waitv` (`SYS_futex_waitv = 449` on x86_64).
+pub fn is_fsync_available() -> bool {
+    const SYS_FUTEX_WAITV: libc::c_long = 449;
+    let ret = unsafe {
+        libc::syscall(
+            SYS_FUTEX_WAITV,
+            std::ptr::null::<libc::c_void>(),
+            0usize,
+            0u32,
+            std::ptr::null::<libc::c_void>(),
+            0i32,
+        )
+    };
+    if ret < 0 {
+        std::io::Error::last_os_error().raw_os_error() != Some(libc::ENOSYS)
+    } else {
+        true
+    }
+}
+
+/// Resolves the 3-tier synchronization fallback (`ntsync -> fsync -> esync -> plain`).
+pub fn resolve_sync_mode(
+    ntsync_available: bool,
+    fsync_available: bool,
+    no_ntsync: bool,
+    no_fsync: bool,
+    no_esync: bool,
+) -> SyncMode {
+    if ntsync_available && !no_ntsync {
+        SyncMode::Ntsync
+    } else if fsync_available && !no_fsync {
+        SyncMode::Fsync
+    } else if !no_esync {
+        SyncMode::Esync
+    } else {
+        SyncMode::Plain
+    }
+}
+
+fn is_steam_runtime_segment(seg: &str) -> bool {
+    seg.contains("steam-runtime") || seg.contains("ubuntu12_32") || seg.contains("ubuntu12_64")
+}
+
+/// Strips Steam Scout Runtime segments from `LD_LIBRARY_PATH` unless opted out,
+/// restoring `SYSTEM_LD_LIBRARY_PATH` when present (or removing `LD_LIBRARY_PATH` if empty).
+pub fn sanitize_steam_runtime_ld_library_path(
+    ld_library_path: Option<&str>,
+    system_ld_library_path: Option<&str>,
+    keep_steam_runtime: bool,
+) -> Option<String> {
+    let raw = ld_library_path?;
+    if keep_steam_runtime || !raw.split(':').any(is_steam_runtime_segment) {
+        return Some(raw.to_string());
+    }
+
+    if let Some(sys) = system_ld_library_path {
+        if sys.trim().is_empty() {
+            return None;
+        }
+        return Some(sys.to_string());
+    }
+
+    let kept: Vec<&str> = raw
+        .split(':')
+        .filter(|seg| !seg.is_empty() && !is_steam_runtime_segment(seg))
+        .collect();
+    if kept.is_empty() {
+        None
+    } else {
+        Some(kept.join(":"))
+    }
 }
 
 fn is_env_enabled(host_env: &BTreeMap<String, String>, key: &str) -> bool {
     host_env.get(key).map(String::as_str) == Some("1")
 }
 
-/// Builds the Wine execution environment, preserving host/game overrides while
-/// configuring NTSYNC/FSYNC, Wayland, `PATH`, `WINEDLLOVERRIDES`, vendor-aware
-/// shader caches, and game rule overrides (`User > Rule > Defaults`).
-pub fn build_runtime_env_with_context(
+/// Builds the Wine execution environment with explicit `ntsync` and `fsync` availability,
+/// preserving host/game overrides while configuring 3-tier sync, Steam `LD_LIBRARY_PATH`
+/// sanitization, Wayland, `PATH`, `WINEDLLOVERRIDES`, vendor-aware shader caches, and
+/// game rule overrides (`User > Rule > Defaults`).
+pub fn build_runtime_env_with_sync(
     runner_root: &Path,
     layout: &PrefixLayout,
     host_env: &BTreeMap<String, String>,
     ntsync_available: bool,
+    fsync_available: bool,
     gpu_probe: &GpuProbeResult,
     rule_eval: &RuleEvaluation,
 ) -> RuntimeEnv {
     let mut env = host_env.clone();
+
+    let keep_steam_rt = is_env_enabled(&env, "HYPERX_PROTON_KEEP_STEAM_RUNTIME_LD");
+    match sanitize_steam_runtime_ld_library_path(
+        env.get("LD_LIBRARY_PATH").map(String::as_str),
+        env.get("SYSTEM_LD_LIBRARY_PATH").map(String::as_str),
+        keep_steam_rt,
+    ) {
+        Some(sanitized) => {
+            env.insert("LD_LIBRARY_PATH".to_string(), sanitized);
+        }
+        None => {
+            env.remove("LD_LIBRARY_PATH");
+        }
+    }
 
     for (key, val) in &rule_eval.env {
         env.entry(key.clone()).or_insert_with(|| val.clone());
@@ -91,14 +200,34 @@ pub fn build_runtime_env_with_context(
     );
     env.insert("WINEDLLOVERRIDES".to_string(), merged_overrides);
 
-    let no_ntsync = is_env_enabled(&env, "PROTON_NO_NTSYNC");
-    if ntsync_available && !no_ntsync {
-        env.insert("PROTON_USE_NTSYNC".to_string(), "1".to_string());
-        env.insert("WINEFSYNC".to_string(), "0".to_string());
-        env.insert("WINEESYNC".to_string(), "0".to_string());
-    } else {
-        env.insert("PROTON_USE_NTSYNC".to_string(), "0".to_string());
-        env.insert("WINEFSYNC".to_string(), "1".to_string());
+    let sync_mode = resolve_sync_mode(
+        ntsync_available,
+        fsync_available,
+        is_env_enabled(&env, "PROTON_NO_NTSYNC"),
+        is_env_enabled(&env, "PROTON_NO_FSYNC"),
+        is_env_enabled(&env, "PROTON_NO_ESYNC"),
+    );
+    match sync_mode {
+        SyncMode::Ntsync => {
+            env.insert("PROTON_USE_NTSYNC".to_string(), "1".to_string());
+            env.insert("WINEFSYNC".to_string(), "0".to_string());
+            env.insert("WINEESYNC".to_string(), "0".to_string());
+        }
+        SyncMode::Fsync => {
+            env.insert("PROTON_USE_NTSYNC".to_string(), "0".to_string());
+            env.insert("WINEFSYNC".to_string(), "1".to_string());
+            env.insert("WINEESYNC".to_string(), "0".to_string());
+        }
+        SyncMode::Esync => {
+            env.insert("PROTON_USE_NTSYNC".to_string(), "0".to_string());
+            env.insert("WINEFSYNC".to_string(), "0".to_string());
+            env.insert("WINEESYNC".to_string(), "1".to_string());
+        }
+        SyncMode::Plain => {
+            env.insert("PROTON_USE_NTSYNC".to_string(), "0".to_string());
+            env.insert("WINEFSYNC".to_string(), "0".to_string());
+            env.insert("WINEESYNC".to_string(), "0".to_string());
+        }
     }
 
     // Avoid Vulkan OPWR login-webview input stalls and d3dcompiler issues
@@ -180,6 +309,26 @@ pub fn build_runtime_env_with_context(
         wineserver_bin: runner_bin.join("wineserver"),
         nvapi_enabled,
     }
+}
+
+/// Backward-compatible wrapper assuming `futex_waitv` (`fsync`) is available.
+pub fn build_runtime_env_with_context(
+    runner_root: &Path,
+    layout: &PrefixLayout,
+    host_env: &BTreeMap<String, String>,
+    ntsync_available: bool,
+    gpu_probe: &GpuProbeResult,
+    rule_eval: &RuleEvaluation,
+) -> RuntimeEnv {
+    build_runtime_env_with_sync(
+        runner_root,
+        layout,
+        host_env,
+        ntsync_available,
+        true,
+        gpu_probe,
+        rule_eval,
+    )
 }
 
 /// Backward-compatible wrapper using default GPU probe (`Unavailable`) and no rules.
