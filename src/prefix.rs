@@ -110,6 +110,97 @@ fn remove_existing_if_present(path: &Path) -> Result<(), String> {
     }
 }
 
+/// Directories inside a Wine prefix where Proton/Wine places builtin PE symlinks.
+const WINE_SYSTEM_DIRS: &[&str] = &[
+    "drive_c/windows",
+    "drive_c/windows/system32",
+    "drive_c/windows/system32/drivers",
+    "drive_c/windows/syswow64",
+    "drive_c/windows/syswow64/drivers",
+];
+
+fn is_foreign_wine_symlink(runner_root: &Path, entry_path: &Path) -> bool {
+    let Ok(meta) = fs::symlink_metadata(entry_path) else {
+        return false;
+    };
+    if !meta.file_type().is_symlink() {
+        return false;
+    }
+    let Ok(target) = fs::read_link(entry_path) else {
+        return false;
+    };
+    if target.starts_with(runner_root) {
+        return false;
+    }
+    // Remove dangling symlinks or symlinks pointing into another Wine/Proton runner's lib/wine tree.
+    let target_str = target.to_string_lossy();
+    !entry_path.exists()
+        || target_str.contains("/files/lib/wine/")
+        || target_str.contains("/lib/wine/")
+        || target_str.contains("/lib64/wine/")
+}
+
+/// Returns true if any Windows system directory inside `wineprefix` still holds
+/// symlinks pointing to another Proton/Wine installation or dangling links.
+pub fn has_foreign_runner_symlinks(runner_root: &Path, wineprefix: &Path) -> bool {
+    for rel in WINE_SYSTEM_DIRS {
+        let dir = wineprefix.join(rel);
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if is_foreign_wine_symlink(runner_root, &entry.path()) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Removes stale symlinks in `drive_c/windows/{,system32,syswow64}` left behind
+/// by other Proton/Wine runners (e.g. GE-Proton, Proton-CachyOS) so `wineboot -u`
+/// repopulates them with this runner's matching binaries without touching
+/// `user.reg`, `system.reg`, `drive_c/users/`, or any regular user files.
+pub fn prune_foreign_runner_symlinks(runner_root: &Path, wineprefix: &Path) -> Result<usize, String> {
+    let mut removed = 0usize;
+    for rel in WINE_SYSTEM_DIRS {
+        let dir = wineprefix.join(rel);
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if is_foreign_wine_symlink(runner_root, &path) {
+                fs::remove_file(&path).map_err(|err| {
+                    format!(
+                        "failed to remove stale foreign runner symlink {}: {err}",
+                        path.display()
+                    )
+                })?;
+                removed += 1;
+            }
+        }
+    }
+    Ok(removed)
+}
+
+/// Returns true when the prefix needs `wineboot -u` before DLL deployment.
+pub fn prefix_needs_wineboot(
+    runner_root: &Path,
+    layout: &PrefixLayout,
+    runner_version: &str,
+) -> bool {
+    let version_stamp_path = layout.wineprefix.join(".hyperx-proton-version");
+    let current_stamp = fs::read_to_string(&version_stamp_path)
+        .ok()
+        .map(|s| s.trim().to_string());
+    let version_changed = current_stamp.as_deref() != Some(runner_version);
+    let system_reg_missing = !layout.wineprefix.join("system.reg").is_file();
+    version_changed
+        || system_reg_missing
+        || has_foreign_runner_symlinks(runner_root, &layout.wineprefix)
+}
+
 /// Non-destructively syncs DX11/DX12 (and opt-in NVAPI) DLLs into `system32`
 /// and updates version stamps without touching `user.reg`, `system.reg`, or
 /// `drive_c/users/`.

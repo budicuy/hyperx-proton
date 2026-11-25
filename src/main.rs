@@ -1,6 +1,8 @@
 use hyperx_proton::config::{load_manifest, resolve_prefix_layout};
 use hyperx_proton::doctor::{CheckSeverity, run_doctor};
-use hyperx_proton::prefix::{acquire_prefix_lock, sync_prefix_dlls};
+use hyperx_proton::prefix::{
+    acquire_prefix_lock, prefix_needs_wineboot, prune_foreign_runner_symlinks, sync_prefix_dlls,
+};
 use hyperx_proton::runtime::{build_runtime_env, is_ntsync_available};
 use std::collections::BTreeMap;
 use std::env;
@@ -55,10 +57,13 @@ fn run_launch(runner_root: &Path, wait_for_exit: bool, args: &[String]) -> Resul
 
     {
         let _lock = acquire_prefix_lock(&layout.lock_file)?;
-        let report =
-            sync_prefix_dlls(runner_root, &layout, &manifest.version, rt.nvapi_enabled)?;
+        let needs_boot = prefix_needs_wineboot(runner_root, &layout, &manifest.version);
 
-        if report.needs_wineboot {
+        if needs_boot {
+            // Remove stale symlinks left behind by foreign Proton/Wine builds (e.g. GE-Proton)
+            // before wineboot so wineboot/explorer load our matching Wine binaries cleanly.
+            prune_foreign_runner_symlinks(runner_root, &layout.wineprefix)?;
+
             let boot_status = Command::new(&rt.wine_bin)
                 .args(["wineboot", "-u"])
                 .envs(&rt.env)
@@ -83,6 +88,11 @@ fn run_launch(runner_root: &Path, wait_for_exit: bool, args: &[String]) -> Resul
                 ));
             }
         }
+
+        // Copy DX11/DX12 (and opt-in NVAPI) DLLs AFTER wineboot so wineboot cannot
+        // overwrite them with Wine builtin stubs, and stamp version only on success.
+        let _report =
+            sync_prefix_dlls(runner_root, &layout, &manifest.version, rt.nvapi_enabled)?;
     }
 
     let status = Command::new(&rt.wine_bin)

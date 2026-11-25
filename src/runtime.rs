@@ -39,6 +39,12 @@ pub fn build_runtime_env(
     };
     env.insert("PATH".to_string(), new_path);
 
+    let wine_dll_path = runner_root.join("files/lib/wine");
+    env.insert(
+        "WINEDLLPATH".to_string(),
+        wine_dll_path.display().to_string(),
+    );
+
     env.insert(
         "WINEPREFIX".to_string(),
         layout.wineprefix.display().to_string(),

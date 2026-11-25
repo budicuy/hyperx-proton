@@ -2,7 +2,10 @@ use std::fs;
 use std::sync::{Arc, Barrier};
 use std::thread;
 use hyperx_proton::config::resolve_prefix_layout;
-use hyperx_proton::prefix::{acquire_prefix_lock, sync_prefix_dlls};
+use hyperx_proton::prefix::{
+    acquire_prefix_lock, has_foreign_runner_symlinks, prune_foreign_runner_symlinks,
+    sync_prefix_dlls,
+};
 
 #[test]
 fn prepare_prefix_preserves_existing_registry_and_user_files() {
@@ -112,4 +115,42 @@ fn prefix_lock_serializes_concurrent_initialization() {
     let t2_acquired = std::time::Instant::now();
     let t1_released = t1.join().unwrap();
     assert!(t2_acquired >= t1_released - std::time::Duration::from_millis(5));
+}
+
+#[test]
+fn prune_foreign_runner_symlinks_cleans_old_proton_links_without_touching_user_files() {
+    use std::os::unix::fs::symlink;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let runner = tmp.path().join("hyperx-runner");
+    let foreign = tmp.path().join("GE-Proton11-14/files/lib/wine/x86_64-windows");
+    let pfx = tmp.path().join("SHARED/pfx");
+    let sys32 = pfx.join("drive_c/windows/system32");
+    let users = pfx.join("drive_c/users/steamuser");
+    fs::create_dir_all(&runner).unwrap();
+    fs::create_dir_all(&foreign).unwrap();
+    fs::create_dir_all(&sys32).unwrap();
+    fs::create_dir_all(&users).unwrap();
+
+    fs::write(foreign.join("wineboot.exe"), b"OLD_GE").unwrap();
+    fs::write(foreign.join("winex11.drv"), b"OLD_GE").unwrap();
+    symlink(foreign.join("wineboot.exe"), sys32.join("wineboot.exe")).unwrap();
+    symlink(foreign.join("winex11.drv"), sys32.join("winex11.drv")).unwrap();
+    symlink(tmp.path().join("nonexistent/explorer.exe"), pfx.join("drive_c/windows/explorer.exe")).unwrap();
+
+    // Regular files and user data must be preserved
+    fs::write(sys32.join("custom_user.dll"), b"USER_DLL").unwrap();
+    fs::write(pfx.join("user.reg"), "KEEP_USER_REG").unwrap();
+    fs::write(users.join("save.dat"), "KEEP_SAVE").unwrap();
+
+    assert!(has_foreign_runner_symlinks(&runner, &pfx));
+    let removed = prune_foreign_runner_symlinks(&runner, &pfx).unwrap();
+    assert_eq!(removed, 3);
+    assert!(!has_foreign_runner_symlinks(&runner, &pfx));
+    assert!(!sys32.join("wineboot.exe").exists());
+    assert!(!sys32.join("winex11.drv").exists());
+    assert!(!pfx.join("drive_c/windows/explorer.exe").exists());
+    assert_eq!(fs::read(sys32.join("custom_user.dll")).unwrap(), b"USER_DLL");
+    assert_eq!(fs::read_to_string(pfx.join("user.reg")).unwrap(), "KEEP_USER_REG");
+    assert_eq!(fs::read_to_string(users.join("save.dat")).unwrap(), "KEEP_SAVE");
 }
