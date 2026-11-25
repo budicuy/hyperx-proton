@@ -26,10 +26,12 @@ pub struct ProcessTuneReport {
     pub timerslack_applied: bool,
     pub timerslack_ns: u64,
     pub nofile_soft: Option<u64>,
+    pub subreaper_applied: bool,
 }
 
-/// Applies fail-soft Linux kernel tuning (`PR_SET_TIMERSLACK` and `RLIMIT_NOFILE`)
-/// to the current process so all spawned Wine/DXVK/vkd3d child processes inherit it.
+/// Applies fail-soft Linux kernel tuning (`PR_SET_TIMERSLACK`, `PR_SET_CHILD_SUBREAPER`,
+/// and `RLIMIT_NOFILE`) to the current process so all spawned Wine/DXVK/vkd3d child
+/// processes inherit it and remain visible in our process tree.
 pub fn apply_process_tuning(timerslack_ns: u64) -> ProcessTuneReport {
     let timerslack_applied = if timerslack_ns > 0 {
         let rc = unsafe {
@@ -46,12 +48,16 @@ pub fn apply_process_tuning(timerslack_ns: u64) -> ProcessTuneReport {
         false
     };
 
+    let subreaper_applied =
+        unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1 as libc::c_ulong, 0, 0, 0) } == 0;
+
     let nofile_soft = raise_nofile_limit(TARGET_NOFILE_SOFT);
 
     ProcessTuneReport {
         timerslack_applied,
         timerslack_ns,
         nofile_soft,
+        subreaper_applied,
     }
 }
 

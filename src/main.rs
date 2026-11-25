@@ -115,10 +115,15 @@ fn run_launch(runner_root: &Path, wait_for_exit: bool, args: &[String]) -> Resul
     if exe_lower.contains("client-win64-shipping.exe")
         && (exe_lower.contains("wuwa") || exe_lower.contains("wuthering"))
     {
-        // Enable wine-cachyos built-in opaque CEF WebView fix for Wuthering Waves login.
-        launch_env
-            .entry("SteamGameId".to_string())
-            .or_insert_with(|| "3513350".to_string());
+        // Enable wine-cachyos built-in opaque CEF WebView fix for Wuthering Waves login
+        // (override when unset or set to launcher placeholder "0").
+        let should_set_appid = launch_env
+            .get("SteamGameId")
+            .map(|v| v.trim().is_empty() || v.trim() == "0")
+            .unwrap_or(true);
+        if should_set_appid {
+            launch_env.insert("SteamGameId".to_string(), "3513350".to_string());
+        }
 
         // WuWa's KRSDKWebViewOSR (KRWebClient.exe) uses DirectComposition + CreateSwapChainForComposition
         // when webAccelerated=1, which renders pure white under Wine/DXVK. Creating Kuro's built-in
@@ -144,7 +149,7 @@ fn run_launch(runner_root: &Path, wait_for_exit: bool, args: &[String]) -> Resul
         .map(String::as_str)
         == Some("1");
     let prewarm_handle = if !no_prewarm {
-        let cache_dirs = collect_shader_cache_dirs(&layout, &launch_env);
+        let cache_dirs = collect_shader_cache_dirs(&layout, &launch_env, Path::new(exe).parent());
         spawn_shader_cache_prewarm(cache_dirs)
     } else {
         None
@@ -175,7 +180,7 @@ fn run_launch(runner_root: &Path, wait_for_exit: bool, args: &[String]) -> Resul
         .spawn()
         .map_err(|err| format!("failed to execute {}: {err}", rt.wine_bin.display()))?;
 
-    let status = wait_with_supervisor(&mut child, !no_supervisor)?;
+    let status = wait_with_supervisor(&mut child, Some(&layout.wineprefix), !no_supervisor)?;
     if let Some(handle) = prewarm_handle {
         let _ = handle.join();
     }

@@ -93,6 +93,12 @@ pub fn build_runtime_env(
         .or_insert_with(|| shader_threads_str);
     env.entry("DXVK_STATE_CACHE".to_string())
         .or_insert_with(|| "1".to_string());
+    // Silence high-frequency DXVK/vkd3d info log spam (e.g. disk-cache flush lines)
+    // during gameplay unless the user explicitly enables debug logging.
+    env.entry("DXVK_LOG_LEVEL".to_string())
+        .or_insert_with(|| "error".to_string());
+    env.entry("VKD3D_DEBUG".to_string())
+        .or_insert_with(|| "none".to_string());
 
     if is_env_enabled(host_env, "PROTON_ENABLE_WAYLAND")
         && host_env

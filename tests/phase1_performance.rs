@@ -142,7 +142,7 @@ fn shader_prewarm_collects_dirs_and_advises_cache_files_only() {
         gl_dir.display().to_string(),
     );
 
-    let dirs = collect_shader_cache_dirs(&layout, &env);
+    let dirs = collect_shader_cache_dirs(&layout, &env, Some(&gl_dir));
     assert_eq!(dirs.len(), 2);
 
     let stats = prewarm_shader_cache_dirs(&dirs);
@@ -171,6 +171,26 @@ fn supervisor_classifies_threads_safely_parses_stat_and_tunes_real_thread() {
     assert_eq!(
         classify_thread_comm("ShaderCompile"),
         ThreadClass::ShaderCompiler
+    );
+    assert_eq!(
+        classify_thread_comm("vkd3d-disk$"),
+        ThreadClass::BackgroundWorker
+    );
+    assert_eq!(
+        classify_thread_comm("FAsyncLoadingTh"),
+        ThreadClass::BackgroundWorker
+    );
+    assert_eq!(
+        classify_thread_comm("IOThreadPool Th"),
+        ThreadClass::BackgroundWorker
+    );
+    assert_eq!(
+        classify_thread_comm("ClvAsyncBuildPo"),
+        ThreadClass::BackgroundWorker
+    );
+    assert_eq!(
+        classify_thread_comm("SGen worker"),
+        ThreadClass::BackgroundWorker
     );
 
     // Render / submission / audio threads MUST NEVER be demoted
@@ -220,7 +240,7 @@ fn supervisor_classifies_threads_safely_parses_stat_and_tunes_real_thread() {
 
     start_barrier.wait();
     let mut tuned = HashSet::new();
-    let count = scan_and_tune_process_tree(std::process::id() as i32, &mut tuned);
+    let count = scan_and_tune_process_tree(std::process::id() as i32, None, &mut tuned);
     done_barrier.wait();
     let policy = handle.join().unwrap();
 
@@ -233,6 +253,6 @@ fn supervisor_classifies_threads_safely_parses_stat_and_tunes_real_thread() {
         .args(["-c", "exit 42"])
         .spawn()
         .expect("spawn test child");
-    let status = wait_with_supervisor(&mut child, true).expect("wait_with_supervisor");
+    let status = wait_with_supervisor(&mut child, None, true).expect("wait_with_supervisor");
     assert_eq!(status.code(), Some(42));
 }

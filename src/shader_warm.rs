@@ -28,13 +28,21 @@ fn is_shader_cache_file(path: &Path) -> bool {
         || lower.starts_with("vkd3d-proton.cache")
 }
 
-/// Collects existing shader cache directories from environment variables and prefix layout.
+/// Collects existing shader cache directories from environment variables, prefix layout,
+/// NVIDIA default GLCache, and the target executable's directory (`vkd3d-proton.cache`).
 pub fn collect_shader_cache_dirs(
     layout: &PrefixLayout,
     env: &BTreeMap<String, String>,
+    exe_dir: Option<&Path>,
 ) -> Vec<PathBuf> {
     let mut unique = BTreeSet::new();
     let mut dirs = Vec::new();
+
+    let mut push_if_dir = |p: PathBuf| {
+        if p.is_dir() && unique.insert(p.clone()) {
+            dirs.push(p);
+        }
+    };
 
     for key in [
         "__GL_SHADER_DISK_CACHE_PATH",
@@ -44,26 +52,30 @@ pub fn collect_shader_cache_dirs(
         if let Some(val) = env.get(key) {
             let trimmed = val.trim();
             if !trimmed.is_empty() {
-                let p = PathBuf::from(trimmed);
-                if p.is_dir() && unique.insert(p.clone()) {
-                    dirs.push(p);
-                }
+                push_if_dir(PathBuf::from(trimmed));
             }
         }
     }
 
-    let dxvk_local = layout
-        .wineprefix
-        .join("drive_c/users/steamuser/AppData/Local/dxvk");
-    if dxvk_local.is_dir() && unique.insert(dxvk_local.clone()) {
-        dirs.push(dxvk_local);
+    if let Some(dir) = exe_dir {
+        push_if_dir(dir.to_path_buf());
     }
 
-    if let Some(compat) = &layout.compat_data_dir {
-        let compat_cache = compat.join("shadercache");
-        if compat_cache.is_dir() && unique.insert(compat_cache.clone()) {
-            dirs.push(compat_cache);
+    if let Some(home) = env.get("HOME") {
+        let trimmed = home.trim();
+        if !trimmed.is_empty() {
+            push_if_dir(PathBuf::from(trimmed).join(".cache/nvidia/GLCache"));
         }
+    }
+
+    push_if_dir(
+        layout
+            .wineprefix
+            .join("drive_c/users/steamuser/AppData/Local/dxvk"),
+    );
+
+    if let Some(compat) = &layout.compat_data_dir {
+        push_if_dir(compat.join("shadercache"));
     }
 
     dirs
