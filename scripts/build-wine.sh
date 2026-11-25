@@ -4,7 +4,7 @@ set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 
 PATCH_HASH="$(hash_patches "$REPO_ROOT/patches/wine")"
-STAMP_KEY="wine:${WINE_REF}:${HYPERX_MARCH}:${PATCH_HASH}"
+STAMP_KEY="wine:${WINE_REF}:${HYPERX_MARCH}:portable-v1:${PATCH_HASH}"
 
 if stamp_matches "wine" "$STAMP_KEY" && [[ -x "$STAGE_DIR/wine/usr/bin/wine" ]]; then
     echo "[wine] stamp matches ($STAMP_KEY), skipping build"
@@ -33,8 +33,8 @@ else
     export CC="gcc"
     export CXX="g++"
 fi
-export CFLAGS="-O2 -march=${HYPERX_MARCH} -pipe"
-export CXXFLAGS="-O2 -march=${HYPERX_MARCH} -pipe"
+export CFLAGS="-O2 -march=${HYPERX_MARCH} -mtune=generic -pipe"
+export CXXFLAGS="-O2 -march=${HYPERX_MARCH} -mtune=generic -pipe"
 
 if [[ ! -x "$WINE_SRC/configure" ]]; then
     echo "[wine] running autogen.sh"
@@ -66,7 +66,9 @@ cd "$WINE_OBJ"
     --without-netapi \
     --without-opencl \
     --without-osmesa \
-    --without-pcap
+    --without-pcap \
+    --without-ffmpeg \
+    --without-unwind
 
 make -j"$(nproc)"
 make DESTDIR="$STAGE_DIR/wine" install

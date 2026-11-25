@@ -55,7 +55,7 @@ pkgver() {
 }
 
 build() {
-    export HYPERX_MARCH="${HYPERX_MARCH:-x86-64-v3}"
+    export HYPERX_MARCH="${HYPERX_MARCH:-x86-64}"
     cd "$_repo_root"
     bash "$_repo_root/scripts/build.sh"
     bash "$_repo_root/scripts/package-runner.sh"

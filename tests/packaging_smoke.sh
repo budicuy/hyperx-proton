@@ -90,6 +90,16 @@ assert data["version"] == sys.argv[2]
 assert "dxvk_sarek" in data["components"]
 PY
 
+# Verify Valve/Heroic VDF metadata exists, matches version & commandline, and has NO require_tool_appid
+[[ -f "$RUNNER_DIR/compatibilitytool.vdf" ]] || { echo "Missing compatibilitytool.vdf"; exit 1; }
+grep -qF "\"$HYPERX_PROTON_VERSION\"" "$RUNNER_DIR/compatibilitytool.vdf" || { echo "compatibilitytool.vdf missing version $HYPERX_PROTON_VERSION"; exit 1; }
+[[ -f "$RUNNER_DIR/toolmanifest.vdf" ]] || { echo "Missing toolmanifest.vdf"; exit 1; }
+grep -qF '"/proton %verb%"' "$RUNNER_DIR/toolmanifest.vdf" || { echo "toolmanifest.vdf missing commandline \"/proton %verb%\""; exit 1; }
+if grep -qi 'require_tool_appid' "$RUNNER_DIR/compatibilitytool.vdf" "$RUNNER_DIR/toolmanifest.vdf"; then
+    echo "ERROR: VDF metadata must not contain require_tool_appid!"
+    exit 1
+fi
+
 # Verify required DLLs and preloader_exec symlinks exist and forbidden d3d9.dll was excluded
 for path in \
     "files/lib/wine/i386-unix/wine64" \

@@ -70,6 +70,31 @@ cat > "$RUNNER_DIR/hyperx-native.json" <<EOF
 }
 EOF
 
+cat > "$RUNNER_DIR/compatibilitytool.vdf" <<EOF
+"compatibilitytools"
+{
+  "compat_tools"
+  {
+    "$HYPERX_PROTON_VERSION"
+    {
+      "install_path" "."
+      "display_name" "HyperX-Proton ($HYPERX_PROTON_VERSION)"
+      "from_oslist"  "windows"
+      "to_oslist"    "linux"
+    }
+  }
+}
+EOF
+
+cat > "$RUNNER_DIR/toolmanifest.vdf" <<EOF
+"manifest"
+{
+  "version" "2"
+  "commandline" "/proton %verb%"
+  "use_sessions" "1"
+}
+EOF
+
 cp -a "$WINE_STAGE/bin/wine" "$RUNNER_DIR/files/bin/wine"
 cp -a "$WINE_STAGE/bin/wineserver" "$RUNNER_DIR/files/bin/wineserver"
 for sub in x86_64-unix x86_64-windows i386-windows; do
