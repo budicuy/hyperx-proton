@@ -156,6 +156,43 @@ SHIM_SRC="$ARG_STAGE_DIR/shim/x86_64-windows/steam.exe"
 [[ -f "$SHIM_SRC" ]] || { echo "Missing staged steam.exe shim: $SHIM_SRC" >&2; exit 1; }
 cp -f "$SHIM_SRC" "$RUNNER_DIR/files/lib/wine/x86_64-windows/steam.exe"
 
+# Drop developer-only static import archives (*.a) that are never used at runtime
+find "$RUNNER_DIR/files/lib/wine" -type f -name '*.a' -delete
+
+# Strip DWARF debug sections from real ELF and PE binaries (opt-out: HYPERX_PROTON_NO_STRIP=1)
+if [[ "${HYPERX_PROTON_NO_STRIP:-0}" != "1" ]]; then
+    if command -v strip >/dev/null 2>&1; then
+        strip --strip-unneeded "$RUNNER_DIR/proton" 2>/dev/null || true
+        find "$RUNNER_DIR/files/bin" "$RUNNER_DIR/files/lib/wine/x86_64-unix" \
+            -type f ! -name 'wine64-preloader' -print0 \
+            | xargs -0 -r -n 16 -P "$(nproc)" bash -c '
+                for f in "$@"; do
+                    if [[ "$(od -An -tx1 -N4 "$f" 2>/dev/null | tr -d " \n")" == "7f454c46" ]]; then
+                        strip --strip-debug "$f" 2>/dev/null || true
+                    fi
+                done
+            ' _
+    fi
+
+    if command -v x86_64-w64-mingw32-strip >/dev/null 2>&1; then
+        find \
+            "$RUNNER_DIR/files/lib/wine/x86_64-windows" \
+            "$RUNNER_DIR/files/lib/wine/i386-windows" \
+            "$RUNNER_DIR/files/lib/dxvk" \
+            "$RUNNER_DIR/files/lib/dxvk-sarek" \
+            "$RUNNER_DIR/files/lib/vkd3d-proton" \
+            "$RUNNER_DIR/files/lib/nvapi" \
+            -type f -print0 \
+            | xargs -0 -r -n 32 -P "$(nproc)" bash -c '
+                for f in "$@"; do
+                    if [[ "$(od -An -tx1 -N2 "$f" 2>/dev/null | tr -d " \n")" == "4d5a" ]]; then
+                        x86_64-w64-mingw32-strip --strip-debug "$f" 2>/dev/null || true
+                    fi
+                done
+            ' _
+    fi
+fi
+
 TARBALL="$ARG_OUT_DIR/${HYPERX_PROTON_VERSION}.tar.zst"
 if command -v zstd >/dev/null 2>&1; then
     tar -C "$ARG_OUT_DIR" --zstd -cf "$TARBALL" "$HYPERX_PROTON_VERSION"

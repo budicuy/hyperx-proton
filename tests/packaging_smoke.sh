@@ -46,7 +46,9 @@ chmod +x \
     "$STAGE_DIR/wine/usr/lib/wine/x86_64-unix/wine64-preloader"
 touch "$STAGE_DIR/wine/usr/lib/wine/x86_64-unix/ntdll.so"
 touch "$STAGE_DIR/wine/usr/lib/wine/x86_64-windows/kernel32.dll"
+touch "$STAGE_DIR/wine/usr/lib/wine/x86_64-windows/libkernel32.a"
 touch "$STAGE_DIR/wine/usr/lib/wine/i386-windows/kernel32.dll"
+touch "$STAGE_DIR/wine/usr/lib/wine/i386-windows/libkernel32.a"
 touch "$STAGE_DIR/wine/usr/share/wine/wine.inf"
 
 # Dummy DX11/DX12/NVAPI DLLs + forbidden d3d9.dll/ddraw.dll to verify strict filtering
@@ -121,8 +123,8 @@ for path in \
     [[ -f "$RUNNER_DIR/$path" ]] || { echo "Missing $path"; exit 1; }
 done
 
-if find "$RUNNER_DIR" \( -name 'd3d9.dll' -o -name 'ddraw.dll' \) | grep -q .; then
-    echo "ERROR: forbidden d3d9.dll or ddraw.dll was copied into runner!"
+if find "$RUNNER_DIR" \( -name 'd3d9.dll' -o -name 'ddraw.dll' -o -name '*.a' \) | grep -q .; then
+    echo "ERROR: forbidden d3d9.dll, ddraw.dll, or static .a archive was copied into runner!"
     exit 1
 fi
 
