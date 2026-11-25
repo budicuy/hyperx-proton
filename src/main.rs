@@ -104,6 +104,24 @@ fn run_launch(runner_root: &Path, wait_for_exit: bool, args: &[String]) -> Resul
         launch_env
             .entry("SteamGameId".to_string())
             .or_insert_with(|| "3513350".to_string());
+
+        // WuWa's KRSDKWebViewOSR (KRWebClient.exe) uses DirectComposition + CreateSwapChainForComposition
+        // when webAccelerated=1, which renders pure white under Wine/DXVK. Creating Kuro's built-in
+        // usebitmap.flag forces bitmap rendering for the webview only (3D game stays full DX12/DX11).
+        if let Some(exe_dir) = Path::new(exe).parent() {
+            for sdk_dir in ["KrPcSdk_Global", "KrPcSdk_CN"] {
+                let webview_dir = exe_dir
+                    .join("ThirdParty")
+                    .join(sdk_dir)
+                    .join("KRSDKRes/KRSDKWebViewOSR");
+                if webview_dir.join("KRWebClient.exe").is_file() {
+                    let flag = webview_dir.join("usebitmap.flag");
+                    if !flag.exists() {
+                        let _ = std::fs::File::create(&flag);
+                    }
+                }
+            }
+        }
     }
 
     let disable_steam_shim = launch_env
