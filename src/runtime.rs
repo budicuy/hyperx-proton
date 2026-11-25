@@ -1,5 +1,6 @@
 use crate::config::PrefixLayout;
 use crate::dll_overrides::merge_dll_overrides;
+use crate::topology::{compute_shader_compiler_threads, detect_physical_cores};
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -76,6 +77,21 @@ pub fn build_runtime_env(
     // Avoid Vulkan OPWR login-webview input stalls and d3dcompiler issues
     // (matches Proton-CachyOS fixes for WuWa, Genshin, and ZZZ) unless overridden.
     env.entry("WINE_DISABLE_VULKAN_OPWR".to_string())
+        .or_insert_with(|| "1".to_string());
+
+    // Size DXVK/vkd3d shader compiler threads from host physical core topology so
+    // background shader compilation does not starve the game's RenderThread.
+    let shader_threads = host_env
+        .get("HYPERX_PROTON_SHADER_THREADS")
+        .and_then(|s| s.trim().parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or_else(|| compute_shader_compiler_threads(detect_physical_cores()));
+    let shader_threads_str = shader_threads.to_string();
+    env.entry("DXVK_NUM_COMPILER_THREADS".to_string())
+        .or_insert_with(|| shader_threads_str.clone());
+    env.entry("VKD3D_WORKER_THREADS".to_string())
+        .or_insert_with(|| shader_threads_str);
+    env.entry("DXVK_STATE_CACHE".to_string())
         .or_insert_with(|| "1".to_string());
 
     if is_env_enabled(host_env, "PROTON_ENABLE_WAYLAND")

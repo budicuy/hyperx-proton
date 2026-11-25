@@ -4,6 +4,9 @@ use hyperx_proton::prefix::{
     acquire_prefix_lock, prefix_needs_wineboot, prune_foreign_runner_symlinks, sync_prefix_dlls,
 };
 use hyperx_proton::runtime::{build_runtime_env, is_ntsync_available};
+use hyperx_proton::shader_warm::{collect_shader_cache_dirs, spawn_shader_cache_prewarm};
+use hyperx_proton::supervisor::wait_with_supervisor;
+use hyperx_proton::sys_tune::{DEFAULT_TIMERSLACK_NS, apply_process_tuning};
 use std::collections::BTreeMap;
 use std::env;
 use std::path::{Path, PathBuf};
@@ -54,6 +57,18 @@ fn run_launch(runner_root: &Path, wait_for_exit: bool, args: &[String]) -> Resul
 
     let host_env: BTreeMap<String, String> = env::vars().collect();
     let rt = build_runtime_env(runner_root, &layout, &host_env, is_ntsync_available());
+
+    let no_tune = host_env
+        .get("HYPERX_PROTON_NO_TUNE")
+        .map(String::as_str)
+        == Some("1");
+    if !no_tune {
+        let timerslack_ns = host_env
+            .get("HYPERX_PROTON_TIMERSLACK_NS")
+            .and_then(|s| s.trim().parse::<u64>().ok())
+            .unwrap_or(DEFAULT_TIMERSLACK_NS);
+        let _ = apply_process_tuning(timerslack_ns);
+    }
 
     {
         let _lock = acquire_prefix_lock(&layout.lock_file)?;
@@ -124,6 +139,17 @@ fn run_launch(runner_root: &Path, wait_for_exit: bool, args: &[String]) -> Resul
         }
     }
 
+    let no_prewarm = launch_env
+        .get("HYPERX_PROTON_NO_PREWARM")
+        .map(String::as_str)
+        == Some("1");
+    let prewarm_handle = if !no_prewarm {
+        let cache_dirs = collect_shader_cache_dirs(&layout, &launch_env);
+        spawn_shader_cache_prewarm(cache_dirs)
+    } else {
+        None
+    };
+
     let disable_steam_shim = launch_env
         .get("HYPERX_PROTON_NO_STEAM_SHIM")
         .map(String::as_str)
@@ -133,16 +159,26 @@ fn run_launch(runner_root: &Path, wait_for_exit: bool, args: &[String]) -> Resul
         .join("drive_c/windows/system32/steam.exe")
         .is_file();
 
+    let no_supervisor = launch_env
+        .get("HYPERX_PROTON_NO_SUPERVISOR")
+        .map(String::as_str)
+        == Some("1");
+
     let mut cmd = Command::new(&rt.wine_bin);
     if has_steam_shim && !disable_steam_shim {
         cmd.arg("C:\\windows\\system32\\steam.exe");
     }
-    let status = cmd
+    let mut child = cmd
         .arg(exe)
         .args(exe_args)
         .envs(&launch_env)
-        .status()
+        .spawn()
         .map_err(|err| format!("failed to execute {}: {err}", rt.wine_bin.display()))?;
+
+    let status = wait_with_supervisor(&mut child, !no_supervisor)?;
+    if let Some(handle) = prewarm_handle {
+        let _ = handle.join();
+    }
 
     if wait_for_exit {
         let _ = Command::new(&rt.wineserver_bin)

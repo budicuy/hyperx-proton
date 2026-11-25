@@ -1,5 +1,7 @@
 use crate::config::load_manifest;
 use crate::runtime::is_ntsync_available;
+use crate::supervisor::is_pidfd_supported;
+use crate::topology::{compute_shader_compiler_threads, detect_physical_cores};
 use std::path::Path;
 use std::process::Command;
 
@@ -54,6 +56,28 @@ pub fn run_doctor(runner_root: &Path) -> Vec<DoctorCheck> {
             name: "ntsync",
             severity: CheckSeverity::Warn,
             detail: "/dev/ntsync unavailable; will fall back to WINEFSYNC=1".to_string(),
+        });
+    }
+
+    let phys_cores = detect_physical_cores();
+    let shader_threads = compute_shader_compiler_threads(phys_cores);
+    checks.push(DoctorCheck {
+        name: "cpu:topology",
+        severity: CheckSeverity::Ok,
+        detail: format!("{phys_cores} physical cores -> {shader_threads} shader compiler threads"),
+    });
+
+    if is_pidfd_supported() {
+        checks.push(DoctorCheck {
+            name: "kernel:pidfd",
+            severity: CheckSeverity::Ok,
+            detail: "pidfd_open event-driven thread supervisor active".to_string(),
+        });
+    } else {
+        checks.push(DoctorCheck {
+            name: "kernel:pidfd",
+            severity: CheckSeverity::Warn,
+            detail: "pidfd_open unavailable; will fall back to standard child wait".to_string(),
         });
     }
 

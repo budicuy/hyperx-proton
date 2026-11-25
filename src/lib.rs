@@ -3,3 +3,7 @@ pub mod dll_overrides;
 pub mod doctor;
 pub mod prefix;
 pub mod runtime;
+pub mod shader_warm;
+pub mod supervisor;
+pub mod sys_tune;
+pub mod topology;

@@ -1,4 +1,5 @@
 use crate::config::PrefixLayout;
+use crate::sys_tune::reflink_or_copy;
 use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::os::unix::io::AsRawFd;
@@ -271,13 +272,7 @@ pub fn sync_prefix_dlls(
             })?;
             let dst = target_dir.join(name);
             remove_existing_if_present(&dst)?;
-            fs::copy(src, &dst).map_err(|err| {
-                format!(
-                    "failed to copy {} to {}: {err}",
-                    src.display(),
-                    dst.display()
-                )
-            })?;
+            reflink_or_copy(src, &dst)?;
         }
 
         fs::write(&version_stamp_path, format!("{runner_version}\n")).map_err(|err| {
