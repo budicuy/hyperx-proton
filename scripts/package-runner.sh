@@ -43,6 +43,7 @@ mkdir -p \
     "$RUNNER_DIR/files/lib/wine/icu/x86_64-windows" \
     "$RUNNER_DIR/files/lib/wine/icu/i386-windows" \
     "$RUNNER_DIR/files/lib/dxvk/x86_64-windows" \
+    "$RUNNER_DIR/files/lib/dxvk-sarek/x86_64-windows" \
     "$RUNNER_DIR/files/lib/vkd3d-proton/x86_64-windows" \
     "$RUNNER_DIR/files/lib/nvapi/x86_64-windows" \
     "$RUNNER_DIR/files/share/wine"
@@ -62,6 +63,7 @@ cat > "$RUNNER_DIR/hyperx-native.json" <<EOF
   "components": {
     "wine": "wine-cachyos@${WINE_SHORT}",
     "dxvk": "${DXVK_REF} (d3d11,dxgi)",
+    "dxvk_sarek": "${DXVK_SAREK_REF} (d3d11,dxgi)",
     "vkd3d_proton": "${VKD3D_PROTON_REF} (d3d12,d3d12core)",
     "dxvk_nvapi": "${DXVK_NVAPI_REF}"
   }
@@ -97,6 +99,12 @@ for dll in d3d11.dll dxgi.dll; do
     src="$ARG_STAGE_DIR/dxvk/x86_64-windows/$dll"
     [[ -f "$src" ]] || { echo "Missing staged DXVK DLL: $src" >&2; exit 1; }
     cp -f "$src" "$RUNNER_DIR/files/lib/dxvk/x86_64-windows/$dll"
+done
+
+for dll in d3d11.dll dxgi.dll; do
+    src="$ARG_STAGE_DIR/dxvk-sarek/x86_64-windows/$dll"
+    [[ -f "$src" ]] || { echo "Missing staged DXVK-Sarek DLL: $src" >&2; exit 1; }
+    cp -f "$src" "$RUNNER_DIR/files/lib/dxvk-sarek/x86_64-windows/$dll"
 done
 
 for dll in d3d12.dll d3d12core.dll; do

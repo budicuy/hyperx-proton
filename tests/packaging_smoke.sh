@@ -28,6 +28,7 @@ mkdir -p \
     "$STAGE_DIR/wine/usr/lib/wine/i386-windows" \
     "$STAGE_DIR/wine/usr/share/wine" \
     "$STAGE_DIR/dxvk/x86_64-windows" \
+    "$STAGE_DIR/dxvk-sarek/x86_64-windows" \
     "$STAGE_DIR/vkd3d/x86_64-windows" \
     "$STAGE_DIR/nvapi/x86_64-windows" \
     "$STAGE_DIR/icu/x86_64-windows" \
@@ -48,10 +49,14 @@ touch "$STAGE_DIR/wine/usr/lib/wine/x86_64-windows/kernel32.dll"
 touch "$STAGE_DIR/wine/usr/lib/wine/i386-windows/kernel32.dll"
 touch "$STAGE_DIR/wine/usr/share/wine/wine.inf"
 
-# Dummy DX11/DX12/NVAPI DLLs + forbidden d3d9.dll to verify strict filtering
+# Dummy DX11/DX12/NVAPI DLLs + forbidden d3d9.dll/ddraw.dll to verify strict filtering
 printf 'd3d11' > "$STAGE_DIR/dxvk/x86_64-windows/d3d11.dll"
 printf 'dxgi' > "$STAGE_DIR/dxvk/x86_64-windows/dxgi.dll"
 printf 'forbidden' > "$STAGE_DIR/dxvk/x86_64-windows/d3d9.dll"
+printf 'sarek-d3d11' > "$STAGE_DIR/dxvk-sarek/x86_64-windows/d3d11.dll"
+printf 'sarek-dxgi' > "$STAGE_DIR/dxvk-sarek/x86_64-windows/dxgi.dll"
+printf 'forbidden' > "$STAGE_DIR/dxvk-sarek/x86_64-windows/d3d9.dll"
+printf 'forbidden' > "$STAGE_DIR/dxvk-sarek/x86_64-windows/ddraw.dll"
 printf 'd3d12' > "$STAGE_DIR/vkd3d/x86_64-windows/d3d12.dll"
 printf 'd3d12core' > "$STAGE_DIR/vkd3d/x86_64-windows/d3d12core.dll"
 printf 'nvapi64' > "$STAGE_DIR/nvapi/x86_64-windows/nvapi64.dll"
@@ -82,6 +87,7 @@ assert data["schema_version"] == 1
 assert data["runner_mode"] == "native"
 assert data["requires_steamrt"] is False
 assert data["version"] == sys.argv[2]
+assert "dxvk_sarek" in data["components"]
 PY
 
 # Verify required DLLs and preloader_exec symlinks exist and forbidden d3d9.dll was excluded
@@ -97,14 +103,16 @@ for path in \
     "files/lib/wine/icu/i386-windows/icuuc68.dll" \
     "files/lib/dxvk/x86_64-windows/d3d11.dll" \
     "files/lib/dxvk/x86_64-windows/dxgi.dll" \
+    "files/lib/dxvk-sarek/x86_64-windows/d3d11.dll" \
+    "files/lib/dxvk-sarek/x86_64-windows/dxgi.dll" \
     "files/lib/vkd3d-proton/x86_64-windows/d3d12.dll" \
     "files/lib/vkd3d-proton/x86_64-windows/d3d12core.dll" \
     "files/lib/nvapi/x86_64-windows/nvapi64.dll"; do
     [[ -f "$RUNNER_DIR/$path" ]] || { echo "Missing $path"; exit 1; }
 done
 
-if find "$RUNNER_DIR" -name 'd3d9.dll' | grep -q .; then
-    echo "ERROR: forbidden d3d9.dll was copied into runner!"
+if find "$RUNNER_DIR" \( -name 'd3d9.dll' -o -name 'ddraw.dll' \) | grep -q .; then
+    echo "ERROR: forbidden d3d9.dll or ddraw.dll was copied into runner!"
     exit 1
 fi
 
