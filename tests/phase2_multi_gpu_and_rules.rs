@@ -104,3 +104,129 @@ fn probe_primary_gpu_respects_no_probe_env_and_is_fail_soft() {
     env.insert("HYPERX_PROTON_NO_GPU_PROBE".to_string(), "1".to_string());
     assert!(matches!(probe_primary_gpu(&env), GpuProbeResult::Unavailable(_)));
 }
+
+use hyperx_proton::dll_overrides::merge_dll_overrides_with_extras;
+use hyperx_proton::rules::{
+    EnsureFileRule, apply_ensure_files, builtin_rules, evaluate_rules, load_rules,
+    should_use_steam_shim,
+};
+
+#[test]
+fn builtin_rules_match_wuwa_and_hoyoverse_with_conditional_steam_shim() {
+    let rules = builtin_rules();
+    let empty_env = BTreeMap::new();
+
+    let wuwa = evaluate_rules(&rules, "/games/wuwa/Client/Binaries/Win64/Client-Win64-Shipping.exe", &empty_env);
+    assert_eq!(wuwa.matched_rule_ids, vec!["wuthering-waves"]);
+    assert_eq!(wuwa.steam_game_id.as_deref(), Some("3513350"));
+    assert!(wuwa.dll_overrides.contains(&"KRSDKExternal.exe=d".to_string()));
+    assert_eq!(wuwa.use_steam_shim, Some(false));
+    assert!(!should_use_steam_shim(&wuwa, &empty_env, true));
+    assert_eq!(wuwa.ensure_files.len(), 2);
+
+    let hsr = evaluate_rules(&rules, "/games/HSR/StarRail.exe", &empty_env);
+    assert_eq!(hsr.matched_rule_ids, vec!["honkai-star-rail"]);
+    assert!(should_use_steam_shim(&hsr, &empty_env, true));
+
+    let mut no_shim = BTreeMap::new();
+    no_shim.insert("HYPERX_PROTON_NO_STEAM_SHIM".to_string(), "1".to_string());
+    assert!(!should_use_steam_shim(&hsr, &no_shim, true));
+
+    let mut force_shim = BTreeMap::new();
+    force_shim.insert("HYPERX_PROTON_FORCE_STEAM_SHIM".to_string(), "1".to_string());
+    assert!(should_use_steam_shim(&wuwa, &force_shim, true));
+
+    // Unknown game does NOT trigger steam shim by default
+    let other = evaluate_rules(&rules, "/games/Cyberpunk/bin/x64/Cyberpunk2077.exe", &empty_env);
+    assert!(other.matched_rule_ids.is_empty());
+    assert!(!should_use_steam_shim(&other, &empty_env, true));
+}
+
+#[test]
+fn custom_rules_support_multi_match_merge_same_id_replace_and_corrupt_json_fail_soft() {
+    let tmp = tempfile::tempdir().unwrap();
+    let rules_dir = tmp.path().join("rules");
+    std::fs::create_dir_all(&rules_dir).unwrap();
+
+    // 1. Valid custom rule with NEW id matching WuWa -> merges with builtin without dropping usebitmap.flag
+    std::fs::write(
+        rules_dir.join("01-wuwa-tweak.json"),
+        r#"{
+            "id": "my-wuwa-tweak",
+            "name": "My WuWa Tweak",
+            "match_criteria": { "exe_any": ["client-win64-shipping.exe"] },
+            "env": { "DXVK_CONFIG": "dxgi.maxFrameRate = 60" },
+            "dll_overrides": ["KRSDKExternal.exe=n", "customfoo=d"],
+            "dxvk_backend": "sarek"
+        }"#,
+    ).unwrap();
+
+    // 2. Valid array file replacing builtin genshin-impact by same id
+    std::fs::write(
+        rules_dir.join("02-override-genshin.json"),
+        r#"[{
+            "id": "genshin-impact",
+            "name": "Custom Genshin",
+            "match_criteria": { "exe_any": ["genshinimpact.exe"] },
+            "use_steam_shim": false
+        }]"#,
+    ).unwrap();
+
+    // 3. Corrupt JSON must emit warning and NOT break loading
+    std::fs::write(rules_dir.join("03-broken.json"), "{ invalid json").unwrap();
+
+    let mut env = BTreeMap::new();
+    env.insert("HYPERX_PROTON_RULES_DIR".to_string(), rules_dir.display().to_string());
+
+    let loaded = load_rules(&env);
+    assert_eq!(loaded.builtin_count, 4);
+    assert_eq!(loaded.custom_count, 2);
+    assert_eq!(loaded.warnings.len(), 1);
+
+    let eval_wuwa = evaluate_rules(&loaded.rules, "/games/wuwa/Client-Win64-Shipping.exe", &env);
+    assert_eq!(eval_wuwa.matched_rule_ids, vec!["wuthering-waves", "my-wuwa-tweak"]);
+    assert_eq!(eval_wuwa.steam_game_id.as_deref(), Some("3513350"));
+    assert_eq!(eval_wuwa.ensure_files.len(), 2);
+    assert_eq!(eval_wuwa.env.get("DXVK_CONFIG").map(String::as_str), Some("dxgi.maxFrameRate = 60"));
+    assert_eq!(eval_wuwa.dxvk_backend, Some(DxvkBackend::Sarek));
+
+    // Custom rule dll_override wins over built-in, user wins over both
+    let merged = merge_dll_overrides_with_extras(Some("customfoo=b"), &eval_wuwa.dll_overrides, false);
+    assert!(merged.starts_with("customfoo=b;"));
+    assert!(merged.contains("KRSDKExternal.exe=n"));
+    assert!(!merged.contains("KRSDKExternal.exe=d"));
+
+    // Replaced genshin-impact rule now has use_steam_shim = false
+    let eval_gi = evaluate_rules(&loaded.rules, "/games/GenshinImpact.exe", &env);
+    assert_eq!(eval_gi.use_steam_shim, Some(false));
+}
+
+#[test]
+fn apply_ensure_files_creates_valid_flag_and_rejects_path_traversal() {
+    let tmp = tempfile::tempdir().unwrap();
+    let exe_dir = tmp.path().join("game");
+    let sdk = exe_dir.join("ThirdParty/KrPcSdk_Global/KRSDKRes/KRSDKWebViewOSR");
+    std::fs::create_dir_all(&sdk).unwrap();
+    std::fs::write(sdk.join("KRWebClient.exe"), b"bin").unwrap();
+
+    let actions = vec![
+        EnsureFileRule {
+            if_exists_rel: "ThirdParty/KrPcSdk_Global/KRSDKRes/KRSDKWebViewOSR/KRWebClient.exe".to_string(),
+            create_rel: "ThirdParty/KrPcSdk_Global/KRSDKRes/KRSDKWebViewOSR/usebitmap.flag".to_string(),
+        },
+        EnsureFileRule {
+            if_exists_rel: "ThirdParty/KrPcSdk_Global/KRSDKRes/KRSDKWebViewOSR/KRWebClient.exe".to_string(),
+            create_rel: "../escaped.flag".to_string(),
+        },
+        EnsureFileRule {
+            if_exists_rel: "ThirdParty/KrPcSdk_Global/KRSDKRes/KRSDKWebViewOSR/KRWebClient.exe".to_string(),
+            create_rel: tmp.path().join("abs.flag").display().to_string(),
+        },
+    ];
+
+    let created = apply_ensure_files(&exe_dir, &actions);
+    assert_eq!(created, 1);
+    assert!(sdk.join("usebitmap.flag").is_file());
+    assert!(!tmp.path().join("escaped.flag").exists());
+    assert!(!tmp.path().join("abs.flag").exists());
+}
