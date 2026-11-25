@@ -1,12 +1,16 @@
-use hyperx_proton::config::{load_manifest, resolve_prefix_layout};
+use hyperx_proton::config::{PrefixLayout, load_manifest, resolve_prefix_layout};
 use hyperx_proton::doctor::{CheckSeverity, run_doctor};
-use hyperx_proton::gpu::{choose_dxvk_backend, is_sarek_bundled, probe_primary_gpu};
+use hyperx_proton::gpu::{DxvkBackend, choose_dxvk_backend, is_sarek_bundled, probe_primary_gpu};
 use hyperx_proton::prefix::{
     acquire_prefix_lock, prefix_needs_wineboot, prune_foreign_runner_symlinks,
     sync_prefix_dlls_with_options,
 };
-use hyperx_proton::rules::{apply_ensure_files, evaluate_rules, load_rules, should_use_steam_shim};
-use hyperx_proton::runtime::{build_runtime_env_with_context, is_ntsync_available};
+use hyperx_proton::rules::{
+    RuleEvaluation, apply_ensure_files, evaluate_rules, load_rules, should_use_steam_shim,
+};
+use hyperx_proton::runtime::{
+    RuntimeEnv, build_runtime_env_with_sync, is_fsync_available, is_ntsync_available,
+};
 use hyperx_proton::shader_warm::{collect_shader_cache_dirs_for_vendor, spawn_shader_cache_prewarm};
 use hyperx_proton::supervisor::wait_with_supervisor;
 use hyperx_proton::sys_tune::{DEFAULT_TIMERSLACK_NS, apply_process_tuning};
@@ -47,6 +51,105 @@ fn wine_to_unix_path(wine_path: &str) -> String {
     without_drive.replace('\\', "/")
 }
 
+fn ensure_prefix_ready(
+    runner_root: &Path,
+    layout: &PrefixLayout,
+    manifest_version: &str,
+    rt: &RuntimeEnv,
+    dxvk_backend: DxvkBackend,
+) -> Result<(), String> {
+    let _lock = acquire_prefix_lock(&layout.lock_file)?;
+    let needs_boot = prefix_needs_wineboot(runner_root, layout, manifest_version);
+
+    if needs_boot {
+        // Remove stale symlinks left behind by foreign Proton/Wine builds (e.g. GE-Proton)
+        // before wineboot so wineboot/explorer load our matching Wine binaries cleanly.
+        prune_foreign_runner_symlinks(runner_root, &layout.wineprefix)?;
+
+        let boot_status = Command::new(&rt.wine_bin)
+            .args(["wineboot", "-u"])
+            .envs(&rt.env)
+            .status()
+            .map_err(|err| format!("failed to run wineboot: {err}"))?;
+        if !boot_status.success() {
+            return Err(format!(
+                "wineboot -u exited with status {:?}",
+                boot_status.code()
+            ));
+        }
+
+        let wait_status = Command::new(&rt.wineserver_bin)
+            .arg("-w")
+            .envs(&rt.env)
+            .status()
+            .map_err(|err| format!("failed to run wineserver -w after wineboot: {err}"))?;
+        if !wait_status.success() {
+            return Err(format!(
+                "wineserver -w after wineboot exited with status {:?}",
+                wait_status.code()
+            ));
+        }
+    }
+
+    // Copy DX11/DX12 (and opt-in NVAPI) DLLs AFTER wineboot so wineboot cannot
+    // overwrite them with Wine builtin stubs, and stamp version/backend only on success.
+    let _report = sync_prefix_dlls_with_options(
+        runner_root,
+        layout,
+        manifest_version,
+        rt.nvapi_enabled,
+        dxvk_backend,
+    )?;
+    Ok(())
+}
+
+fn run_in_prefix(runner_root: &Path, args: &[String]) -> Result<i32, String> {
+    let exe = args
+        .first()
+        .ok_or_else(|| "missing target executable argument".to_string())?;
+    let exe_args = &args[1..];
+
+    let manifest = load_manifest(runner_root)?;
+    let compat_env = env::var_os("STEAM_COMPAT_DATA_PATH").map(PathBuf::from);
+    let prefix_env = env::var_os("WINEPREFIX").map(PathBuf::from);
+    let layout = resolve_prefix_layout(compat_env.as_deref(), prefix_env.as_deref())?;
+
+    let host_env: BTreeMap<String, String> = env::vars().collect();
+    let gpu_probe = probe_primary_gpu(&host_env);
+    let dxvk_sel = choose_dxvk_backend(
+        &gpu_probe,
+        host_env.get("HYPERX_PROTON_DXVK_BACKEND").map(String::as_str),
+        None,
+        is_sarek_bundled(runner_root),
+    );
+    let rt = build_runtime_env_with_sync(
+        runner_root,
+        &layout,
+        &host_env,
+        is_ntsync_available(),
+        is_fsync_available(),
+        &gpu_probe,
+        &RuleEvaluation::default(),
+    );
+
+    ensure_prefix_ready(
+        runner_root,
+        &layout,
+        &manifest.version,
+        &rt,
+        dxvk_sel.backend,
+    )?;
+
+    let status = Command::new(&rt.wine_bin)
+        .arg(exe)
+        .args(exe_args)
+        .envs(&rt.env)
+        .status()
+        .map_err(|err| format!("failed to execute {}: {err}", rt.wine_bin.display()))?;
+
+    Ok(status.code().unwrap_or(1))
+}
+
 fn run_launch(runner_root: &Path, wait_for_exit: bool, args: &[String]) -> Result<i32, String> {
     let exe = args
         .first()
@@ -75,11 +178,12 @@ fn run_launch(runner_root: &Path, wait_for_exit: bool, args: &[String]) -> Resul
         eprintln!("hyperx-proton: warning: {warn}");
     }
 
-    let rt = build_runtime_env_with_context(
+    let rt = build_runtime_env_with_sync(
         runner_root,
         &layout,
         &host_env,
         is_ntsync_available(),
+        is_fsync_available(),
         &gpu_probe,
         &rule_eval,
     );
@@ -98,50 +202,13 @@ fn run_launch(runner_root: &Path, wait_for_exit: bool, args: &[String]) -> Resul
         let _ = apply_process_tuning(timerslack_ns);
     }
 
-    {
-        let _lock = acquire_prefix_lock(&layout.lock_file)?;
-        let needs_boot = prefix_needs_wineboot(runner_root, &layout, &manifest.version);
-
-        if needs_boot {
-            // Remove stale symlinks left behind by foreign Proton/Wine builds (e.g. GE-Proton)
-            // before wineboot so wineboot/explorer load our matching Wine binaries cleanly.
-            prune_foreign_runner_symlinks(runner_root, &layout.wineprefix)?;
-
-            let boot_status = Command::new(&rt.wine_bin)
-                .args(["wineboot", "-u"])
-                .envs(&rt.env)
-                .status()
-                .map_err(|err| format!("failed to run wineboot: {err}"))?;
-            if !boot_status.success() {
-                return Err(format!(
-                    "wineboot -u exited with status {:?}",
-                    boot_status.code()
-                ));
-            }
-
-            let wait_status = Command::new(&rt.wineserver_bin)
-                .arg("-w")
-                .envs(&rt.env)
-                .status()
-                .map_err(|err| format!("failed to run wineserver -w after wineboot: {err}"))?;
-            if !wait_status.success() {
-                return Err(format!(
-                    "wineserver -w after wineboot exited with status {:?}",
-                    wait_status.code()
-                ));
-            }
-        }
-
-        // Copy DX11/DX12 (and opt-in NVAPI) DLLs AFTER wineboot so wineboot cannot
-        // overwrite them with Wine builtin stubs, and stamp version/backend only on success.
-        let _report = sync_prefix_dlls_with_options(
-            runner_root,
-            &layout,
-            &manifest.version,
-            rt.nvapi_enabled,
-            dxvk_sel.backend,
-        )?;
-    }
+    ensure_prefix_ready(
+        runner_root,
+        &layout,
+        &manifest.version,
+        &rt,
+        dxvk_sel.backend,
+    )?;
 
     if let Some(exe_dir) = Path::new(exe).parent() {
         let _ = apply_ensure_files(exe_dir, &rule_eval.ensure_files);
@@ -204,7 +271,7 @@ fn main() -> ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
     let Some(verb) = args.first().map(String::as_str) else {
         eprintln!(
-            "Usage: proton <waitforexitandrun|run|doctor|version|getcompatpath|getnativepath> [args...]"
+            "Usage: proton <waitforexitandrun|run|runinprefix|doctor|version|getcompatpath|getnativepath> [args...]"
         );
         return ExitCode::from(2);
     };
@@ -276,6 +343,13 @@ fn main() -> ExitCode {
             }
         },
         "run" => match run_launch(&runner_root, false, &args[1..]) {
+            Ok(code) => ExitCode::from(u8::try_from(code).unwrap_or(1)),
+            Err(err) => {
+                eprintln!("hyperx-proton: {err}");
+                ExitCode::from(1)
+            }
+        },
+        "runinprefix" => match run_in_prefix(&runner_root, &args[1..]) {
             Ok(code) => ExitCode::from(u8::try_from(code).unwrap_or(1)),
             Err(err) => {
                 eprintln!("hyperx-proton: {err}");

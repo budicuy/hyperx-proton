@@ -1,12 +1,30 @@
 use crate::config::load_manifest;
 use crate::gpu::{GpuProbeResult, choose_dxvk_backend, is_sarek_bundled, probe_primary_gpu};
 use crate::rules::load_rules;
-use crate::runtime::is_ntsync_available;
+use crate::runtime::{SyncMode, is_fsync_available, is_ntsync_available, resolve_sync_mode};
 use crate::supervisor::is_pidfd_supported;
 use crate::topology::{compute_shader_compiler_threads, detect_physical_cores};
 use std::collections::BTreeMap;
+use std::ffi::{CStr, CString};
 use std::path::Path;
 use std::process::Command;
+
+pub const MIN_GLIBC_VERSION: (u32, u32) = (2, 38);
+
+#[repr(C)]
+struct LinkMap {
+    l_addr: libc::uintptr_t,
+    l_name: *const libc::c_char,
+}
+
+unsafe extern "C" {
+    fn dlinfo(
+        handle: *mut libc::c_void,
+        request: libc::c_int,
+        info: *mut libc::c_void,
+    ) -> libc::c_int;
+    fn gnu_get_libc_version() -> *const libc::c_char;
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CheckSeverity {
@@ -22,14 +40,81 @@ pub struct DoctorCheck {
     pub detail: String,
 }
 
-fn find_host_lib(lib_name: &str) -> Option<String> {
-    for dir in ["/usr/lib", "/usr/lib64", "/lib", "/lib64"] {
-        let candidate = Path::new(dir).join(lib_name);
-        if candidate.exists() {
-            return Some(candidate.display().to_string());
-        }
+/// Parses a `major.minor[.patch]` glibc version string into `(major, minor)`.
+pub fn parse_glibc_version(raw: &str) -> Option<(u32, u32)> {
+    let mut parts = raw.trim().split('.');
+    let major = parts.next()?.parse::<u32>().ok()?;
+    let minor = parts.next()?.parse::<u32>().ok()?;
+    Some((major, minor))
+}
+
+/// Evaluates whether the host glibc version meets `MIN_GLIBC_VERSION` (`2.38`).
+pub fn check_glibc_floor(raw: &str) -> DoctorCheck {
+    match parse_glibc_version(raw) {
+        Some(ver) if ver >= MIN_GLIBC_VERSION => DoctorCheck {
+            name: "host:glibc",
+            severity: CheckSeverity::Ok,
+            detail: format!(
+                "glibc {raw} (>= {}.{})",
+                MIN_GLIBC_VERSION.0, MIN_GLIBC_VERSION.1
+            ),
+        },
+        Some(_) => DoctorCheck {
+            name: "host:glibc",
+            severity: CheckSeverity::Fail,
+            detail: format!(
+                "glibc {raw} is too old; Wine requires glibc >= {}.{}",
+                MIN_GLIBC_VERSION.0, MIN_GLIBC_VERSION.1
+            ),
+        },
+        None => DoctorCheck {
+            name: "host:glibc",
+            severity: CheckSeverity::Warn,
+            detail: format!("could not parse host glibc version '{raw}'"),
+        },
     }
-    None
+}
+
+/// Resolves a host shared library across any Linux distro's dynamic linker paths
+/// using `dlopen` + `dlinfo(RTLD_DI_LINKMAP)`.
+pub fn find_host_lib(lib_name: &str) -> Option<String> {
+    const RTLD_DI_LINKMAP: libc::c_int = 2;
+    let c_name = CString::new(lib_name).ok()?;
+    let handle = unsafe { libc::dlopen(c_name.as_ptr(), libc::RTLD_LAZY | libc::RTLD_LOCAL) };
+    if handle.is_null() {
+        return None;
+    }
+
+    let mut lm: *const LinkMap = std::ptr::null();
+    let rc = unsafe {
+        dlinfo(
+            handle,
+            RTLD_DI_LINKMAP,
+            (&mut lm as *mut *const LinkMap).cast::<libc::c_void>(),
+        )
+    };
+    let resolved = if rc == 0 && !lm.is_null() {
+        let l_name = unsafe { (*lm).l_name };
+        if !l_name.is_null() {
+            let path = unsafe { CStr::from_ptr(l_name) }
+                .to_string_lossy()
+                .into_owned();
+            if path.is_empty() {
+                lib_name.to_string()
+            } else {
+                path
+            }
+        } else {
+            lib_name.to_string()
+        }
+    } else {
+        lib_name.to_string()
+    };
+
+    unsafe {
+        libc::dlclose(handle);
+    }
+    Some(resolved)
 }
 
 fn check_gst_plugin(plugin: &str) -> Result<(), String> {
@@ -48,19 +133,32 @@ fn check_gst_plugin(plugin: &str) -> Result<(), String> {
 pub fn run_doctor(runner_root: &Path) -> Vec<DoctorCheck> {
     let mut checks = Vec::new();
 
-    if is_ntsync_available() {
-        checks.push(DoctorCheck {
-            name: "ntsync",
-            severity: CheckSeverity::Ok,
-            detail: "/dev/ntsync is available".to_string(),
-        });
-    } else {
-        checks.push(DoctorCheck {
-            name: "ntsync",
-            severity: CheckSeverity::Warn,
-            detail: "/dev/ntsync unavailable; will fall back to WINEFSYNC=1".to_string(),
-        });
-    }
+    let ntsync_avail = is_ntsync_available();
+    let fsync_avail = is_fsync_available();
+    let active_sync = resolve_sync_mode(ntsync_avail, fsync_avail, false, false, false);
+    checks.push(DoctorCheck {
+        name: "sync:tier",
+        severity: match active_sync {
+            SyncMode::Ntsync | SyncMode::Fsync => CheckSeverity::Ok,
+            SyncMode::Esync | SyncMode::Plain => CheckSeverity::Warn,
+        },
+        detail: format!(
+            "active={} (ntsync={}, fsync={})",
+            active_sync.as_str(),
+            ntsync_avail,
+            fsync_avail
+        ),
+    });
+
+    let glibc_raw = unsafe {
+        let ptr = gnu_get_libc_version();
+        if ptr.is_null() {
+            String::new()
+        } else {
+            CStr::from_ptr(ptr).to_string_lossy().into_owned()
+        }
+    };
+    checks.push(check_glibc_floor(&glibc_raw));
 
     let phys_cores = detect_physical_cores();
     let shader_threads = compute_shader_compiler_threads(phys_cores);
