@@ -1,4 +1,5 @@
 use crate::config::PrefixLayout;
+use crate::gpu::GpuVendor;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::os::unix::io::AsRawFd;
@@ -25,15 +26,18 @@ fn is_shader_cache_file(path: &Path) -> bool {
         || lower.ends_with(".bin")
         || lower.ends_with(".toc")
         || lower.ends_with(".cache")
+        || lower.ends_with(".foz")
+        || lower.ends_with(".idx")
         || lower.starts_with("vkd3d-proton.cache")
 }
 
-/// Collects existing shader cache directories from environment variables, prefix layout,
-/// NVIDIA default GLCache, and the target executable's directory (`vkd3d-proton.cache`).
-pub fn collect_shader_cache_dirs(
+/// Collects existing shader cache directories for the detected GPU vendor
+/// (NVIDIA GLCache vs Mesa RADV/ANV cache) plus common DXVK/vkd3d directories.
+pub fn collect_shader_cache_dirs_for_vendor(
     layout: &PrefixLayout,
     env: &BTreeMap<String, String>,
     exe_dir: Option<&Path>,
+    vendor: Option<GpuVendor>,
 ) -> Vec<PathBuf> {
     let mut unique = BTreeSet::new();
     let mut dirs = Vec::new();
@@ -44,11 +48,7 @@ pub fn collect_shader_cache_dirs(
         }
     };
 
-    for key in [
-        "__GL_SHADER_DISK_CACHE_PATH",
-        "DXVK_STATE_CACHE_PATH",
-        "VKD3D_SHADER_CACHE_PATH",
-    ] {
+    for key in ["DXVK_STATE_CACHE_PATH", "VKD3D_SHADER_CACHE_PATH"] {
         if let Some(val) = env.get(key) {
             let trimmed = val.trim();
             if !trimmed.is_empty() {
@@ -61,13 +61,6 @@ pub fn collect_shader_cache_dirs(
         push_if_dir(dir.to_path_buf());
     }
 
-    if let Some(home) = env.get("HOME") {
-        let trimmed = home.trim();
-        if !trimmed.is_empty() {
-            push_if_dir(PathBuf::from(trimmed).join(".cache/nvidia/GLCache"));
-        }
-    }
-
     push_if_dir(
         layout
             .wineprefix
@@ -78,7 +71,58 @@ pub fn collect_shader_cache_dirs(
         push_if_dir(compat.join("shadercache"));
     }
 
+    match vendor {
+        None | Some(GpuVendor::Nvidia) => {
+            if let Some(val) = env.get("__GL_SHADER_DISK_CACHE_PATH") {
+                let trimmed = val.trim();
+                if !trimmed.is_empty() {
+                    push_if_dir(PathBuf::from(trimmed));
+                }
+            }
+            if let Some(home) = env.get("HOME") {
+                let trimmed = home.trim();
+                if !trimmed.is_empty() {
+                    push_if_dir(PathBuf::from(trimmed).join(".cache/nvidia/GLCache"));
+                }
+            }
+        }
+        Some(GpuVendor::Amd | GpuVendor::Intel) => {
+            if let Some(val) = env.get("MESA_SHADER_CACHE_DIR") {
+                let trimmed = val.trim();
+                if !trimmed.is_empty() {
+                    push_if_dir(PathBuf::from(trimmed));
+                }
+            }
+            if let Some(xdg) = env.get("XDG_CACHE_HOME") {
+                let trimmed = xdg.trim();
+                if !trimmed.is_empty() {
+                    let xdg_path = PathBuf::from(trimmed);
+                    push_if_dir(xdg_path.join("mesa_shader_cache"));
+                    push_if_dir(xdg_path.join("mesa_shader_cache_sf"));
+                }
+            }
+            if let Some(home) = env.get("HOME") {
+                let trimmed = home.trim();
+                if !trimmed.is_empty() {
+                    let home_path = PathBuf::from(trimmed);
+                    push_if_dir(home_path.join(".cache/mesa_shader_cache"));
+                    push_if_dir(home_path.join(".cache/mesa_shader_cache_sf"));
+                }
+            }
+        }
+        Some(GpuVendor::Other(_)) => {}
+    }
+
     dirs
+}
+
+/// Backward-compatible wrapper collecting shader cache directories (NVIDIA + common).
+pub fn collect_shader_cache_dirs(
+    layout: &PrefixLayout,
+    env: &BTreeMap<String, String>,
+    exe_dir: Option<&Path>,
+) -> Vec<PathBuf> {
+    collect_shader_cache_dirs_for_vendor(layout, env, exe_dir, None)
 }
 
 /// Issues non-blocking `POSIX_FADV_WILLNEED` hints for shader cache files under `dirs`

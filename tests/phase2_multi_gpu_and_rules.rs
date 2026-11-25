@@ -230,3 +230,98 @@ fn apply_ensure_files_creates_valid_flag_and_rejects_path_traversal() {
     assert!(!tmp.path().join("escaped.flag").exists());
     assert!(!tmp.path().join("abs.flag").exists());
 }
+
+use hyperx_proton::config::resolve_prefix_layout;
+use hyperx_proton::rules::RuleEvaluation;
+use hyperx_proton::runtime::build_runtime_env_with_context;
+use hyperx_proton::shader_warm::{collect_shader_cache_dirs_for_vendor, prewarm_shader_cache_dirs};
+
+#[test]
+fn runtime_env_applies_vendor_specific_cache_and_blocks_nvapi_on_amd_intel() {
+    let runner = std::path::Path::new("/opt/hyperx-proton");
+    let layout = resolve_prefix_layout(Some(std::path::Path::new("/tmp/SHARED")), None).unwrap();
+
+    let mut host_env = BTreeMap::new();
+    host_env.insert("PROTON_ENABLE_NVAPI".to_string(), "1".to_string());
+
+    let amd = GpuProbeResult::Detected(mock_gpu(0x1002, 0x744C, "AMD RX 7900", GpuDeviceType::Discrete, 1, 3));
+    let rt_amd = build_runtime_env_with_context(runner, &layout, &host_env, true, &amd, &RuleEvaluation::default());
+    assert!(!rt_amd.nvapi_enabled);
+    assert!(!rt_amd.env.get("WINEDLLOVERRIDES").unwrap().contains("nvapi64=n"));
+    assert!(!rt_amd.env.contains_key("__GL_SHADER_DISK_CACHE"));
+    assert_eq!(rt_amd.env.get("MESA_SHADER_CACHE_DISABLE").map(String::as_str), Some("false"));
+    assert_eq!(rt_amd.env.get("MESA_SHADER_CACHE_MAX_SIZE").map(String::as_str), Some("2G"));
+
+    let intel = GpuProbeResult::Detected(mock_gpu(0x8086, 0x4680, "Intel UHD 730", GpuDeviceType::Integrated, 1, 3));
+    let rt_intel = build_runtime_env_with_context(runner, &layout, &host_env, true, &intel, &RuleEvaluation::default());
+    assert!(!rt_intel.nvapi_enabled);
+    assert_eq!(rt_intel.env.get("MESA_SHADER_CACHE_MAX_SIZE").map(String::as_str), Some("2G"));
+
+    // HYPERX_PROTON_FORCE_NVAPI=1 overrides vendor guard
+    let mut force_env = host_env.clone();
+    force_env.insert("HYPERX_PROTON_FORCE_NVAPI".to_string(), "1".to_string());
+    let rt_forced = build_runtime_env_with_context(runner, &layout, &force_env, true, &amd, &RuleEvaluation::default());
+    assert!(rt_forced.nvapi_enabled);
+    assert!(rt_forced.env.get("WINEDLLOVERRIDES").unwrap().contains("nvapi64=n"));
+
+    // NVIDIA allows NVAPI and sets NVIDIA 2 GiB cache, not Mesa
+    let nv = GpuProbeResult::Detected(mock_gpu(0x10DE, 0x21C4, "GTX 1660 SUPER", GpuDeviceType::Discrete, 1, 4));
+    let rt_nv = build_runtime_env_with_context(runner, &layout, &host_env, true, &nv, &RuleEvaluation::default());
+    assert!(rt_nv.nvapi_enabled);
+    assert!(rt_nv.env.get("WINEDLLOVERRIDES").unwrap().contains("nvapi64=n"));
+    assert_eq!(rt_nv.env.get("__GL_SHADER_DISK_CACHE_SIZE").map(String::as_str), Some("2147483647"));
+    assert!(!rt_nv.env.contains_key("MESA_SHADER_CACHE_MAX_SIZE"));
+}
+
+#[test]
+fn runtime_env_respects_user_over_rule_over_defaults_for_dxvk_config_and_opwr() {
+    let runner = std::path::Path::new("/opt/hyperx-proton");
+    let layout = resolve_prefix_layout(Some(std::path::Path::new("/tmp/SHARED")), None).unwrap();
+    let nv = GpuProbeResult::Detected(mock_gpu(0x10DE, 0x21C4, "GTX 1660 SUPER", GpuDeviceType::Discrete, 1, 4));
+
+    let mut rule_eval = RuleEvaluation::default();
+    rule_eval.steam_game_id = Some("3513350".to_string());
+    rule_eval.env.insert("WINE_DISABLE_VULKAN_OPWR".to_string(), "0".to_string());
+    rule_eval.env.insert("DXVK_CONFIG".to_string(), "dxgi.maxFrameRate = 60".to_string());
+
+    // Without user override: rule wins over runtime defaults AND dxvk.numCompilerThreads appends cleanly
+    let mut host_env = BTreeMap::new();
+    host_env.insert("SteamGameId".to_string(), "0".to_string());
+    let rt = build_runtime_env_with_context(runner, &layout, &host_env, true, &nv, &rule_eval);
+    assert_eq!(rt.env.get("SteamGameId").map(String::as_str), Some("3513350"));
+    assert_eq!(rt.env.get("WINE_DISABLE_VULKAN_OPWR").map(String::as_str), Some("0"));
+    let dxvk_cfg = rt.env.get("DXVK_CONFIG").unwrap();
+    assert!(dxvk_cfg.contains("dxgi.maxFrameRate = 60"), "got: {dxvk_cfg}");
+    assert!(dxvk_cfg.contains("dxvk.numCompilerThreads = "), "got: {dxvk_cfg}");
+
+    // With explicit user override: user beats rule
+    host_env.insert("WINE_DISABLE_VULKAN_OPWR".to_string(), "1".to_string());
+    host_env.insert("SteamGameId".to_string(), "999999".to_string());
+    let rt_user = build_runtime_env_with_context(runner, &layout, &host_env, true, &nv, &rule_eval);
+    assert_eq!(rt_user.env.get("WINE_DISABLE_VULKAN_OPWR").map(String::as_str), Some("1"));
+    assert_eq!(rt_user.env.get("SteamGameId").map(String::as_str), Some("999999"));
+}
+
+#[test]
+fn shader_warm_collects_and_advises_mesa_cache_for_amd_and_intel() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let mesa_sf = home.join(".cache/mesa_shader_cache_sf");
+    let nv_gl = home.join(".cache/nvidia/GLCache");
+    std::fs::create_dir_all(&mesa_sf).unwrap();
+    std::fs::create_dir_all(&nv_gl).unwrap();
+    std::fs::write(mesa_sf.join("radv.foz"), vec![1u8; 4096]).unwrap();
+    std::fs::write(mesa_sf.join("index.idx"), vec![2u8; 512]).unwrap();
+    std::fs::write(nv_gl.join("nv.bin"), vec![3u8; 4096]).unwrap();
+
+    let layout = resolve_prefix_layout(Some(&tmp.path().join("SHARED")), None).unwrap();
+    let mut env = BTreeMap::new();
+    env.insert("HOME".to_string(), home.display().to_string());
+
+    let amd_dirs = collect_shader_cache_dirs_for_vendor(&layout, &env, None, Some(GpuVendor::Amd));
+    assert!(amd_dirs.contains(&mesa_sf));
+    assert!(!amd_dirs.contains(&nv_gl));
+    let stats = prewarm_shader_cache_dirs(&amd_dirs);
+    assert_eq!(stats.files_advised, 2);
+    assert_eq!(stats.bytes_advised, 4608);
+}
