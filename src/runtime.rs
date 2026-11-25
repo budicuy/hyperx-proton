@@ -113,6 +113,15 @@ pub fn build_runtime_env(
         .or_insert_with(|| shader_threads_str);
     env.entry("DXVK_STATE_CACHE".to_string())
         .or_insert_with(|| "1".to_string());
+    // Ensure NVIDIA shader disk cache is enabled with a safe 2 GiB (INT32_MAX) ceiling
+    // so vkd3d-proton's shaderModuleIdentifier cache does not thrash at NVIDIA's 1 GiB default
+    // while avoiding the 32-bit overflow bug on >4 GiB values.
+    env.entry("__GL_SHADER_DISK_CACHE".to_string())
+        .or_insert_with(|| "1".to_string());
+    env.entry("__GL_SHADER_DISK_CACHE_SKIP_CLEANUP".to_string())
+        .or_insert_with(|| "1".to_string());
+    env.entry("__GL_SHADER_DISK_CACHE_SIZE".to_string())
+        .or_insert_with(|| "2147483647".to_string());
     // Silence high-frequency DXVK/vkd3d info log spam (e.g. disk-cache flush lines)
     // during gameplay unless the user explicitly enables debug logging.
     env.entry("DXVK_LOG_LEVEL".to_string())

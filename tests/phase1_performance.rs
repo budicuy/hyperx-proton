@@ -78,6 +78,10 @@ fn runtime_env_sets_shader_threads_and_respects_user_overrides() {
         rt.env.get("DXVK_STATE_CACHE").map(String::as_str),
         Some("1")
     );
+    assert_eq!(
+        rt.env.get("__GL_SHADER_DISK_CACHE_SIZE").map(String::as_str),
+        Some("2147483647")
+    );
 
     // Explicit per-component override wins over HYPERX_PROTON_SHADER_THREADS
     let mut custom = BTreeMap::new();
