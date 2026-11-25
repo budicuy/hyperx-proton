@@ -1,0 +1,22 @@
+[package]
+name = "hyperx-proton"
+version = "0.1.0"
+edition = "2024"
+description = "Native Arch Linux Proton runner for HyperX-Launcher (DX11/DX12 + WebView)"
+license = "GPL-2.0-or-later"
+
+[lib]
+name = "hyperx_proton"
+path = "src/lib.rs"
+
+[[bin]]
+name = "hyperx-proton"
+path = "src/main.rs"
+
+[dependencies]
+libc = "0.2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[dev-dependencies]
+tempfile = "3.13"

@@ -1,0 +1,6 @@
+/target/
+/build/
+/dist/
+*.pkg.tar.zst
+*.tar.zst
+Cargo.lock
