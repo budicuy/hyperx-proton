@@ -1,0 +1,71 @@
+# Maintainer: HyperXOS <hyperxos@local>
+# Repo-coupled PKGBUILD: reads versions.env and invokes scripts/build.sh + package-runner.sh
+
+pkgname=hyperx-proton
+pkgver=11.0.20261125
+pkgrel=1
+pkgdesc="Native Arch Linux Proton runner for HyperX-Launcher (DX11/DX12 + WebView)"
+arch=('x86_64')
+url="https://github.com/budicuy/hyperx-proton"
+license=('GPL-2.0-or-later')
+depends=(
+    'gnutls'
+    'ca-certificates'
+    'vulkan-icd-loader'
+    'freetype2'
+    'fontconfig'
+    'libxkbcommon'
+    'wayland'
+    'libx11'
+    'libxrandr'
+    'libxcursor'
+    'libxi'
+    'libxcomposite'
+    'libxfixes'
+    'gstreamer'
+    'gst-plugins-base'
+    'gst-plugins-good'
+    'gst-libav'
+    'sdl2'
+    'libpulse'
+    'systemd-libs'
+)
+makedepends=(
+    'rust'
+    'cargo'
+    'mingw-w64-gcc'
+    'meson'
+    'ninja'
+    'glslang'
+    'bison'
+    'flex'
+    'ccache'
+    'git'
+    'zstd'
+    'wayland-protocols'
+    'vulkan-headers'
+)
+options=('!strip' '!debug')
+
+_repo_root="${HYPERX_PROTON_REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+
+pkgver() {
+    source "$_repo_root/versions.env"
+    printf '%s\n' "${HYPERX_PROTON_VERSION#hyperx-proton-}" | tr '-' '.'
+}
+
+build() {
+    export HYPERX_MARCH="${HYPERX_MARCH:-x86-64-v3}"
+    cd "$_repo_root"
+    bash "$_repo_root/scripts/build.sh"
+    bash "$_repo_root/scripts/package-runner.sh"
+}
+
+package() {
+    source "$_repo_root/versions.env"
+    local runner_dir="$_repo_root/dist/$HYPERX_PROTON_VERSION"
+    install -dm755 "$pkgdir/usr/share/hyperx-proton"
+    cp -a "$runner_dir/." "$pkgdir/usr/share/hyperx-proton/"
+    install -dm755 "$pkgdir/usr/bin"
+    ln -s /usr/share/hyperx-proton/proton "$pkgdir/usr/bin/hyperx-proton"
+}

@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO_ROOT"
+
+# 1. Syntax check all shell scripts and PKGBUILD
+shopt -s nullglob
+for f in scripts/*.sh packaging/arch/PKGBUILD; do
+    bash -n "$f"
+done
+
+# 2. Ensure release binary exists for packaging smoke test
+if [[ ! -x "$REPO_ROOT/target/release/hyperx-proton" ]]; then
+    cargo build --release
+fi
+
+TMP_DIR="$(mktemp -d)"
+trap 'rm -rf "$TMP_DIR"' EXIT
+
+STAGE_DIR="$TMP_DIR/stage"
+OUT_DIR="$TMP_DIR/dist"
+
+mkdir -p \
+    "$STAGE_DIR/wine/usr/bin" \
+    "$STAGE_DIR/wine/usr/lib/wine/x86_64-unix" \
+    "$STAGE_DIR/wine/usr/lib/wine/x86_64-windows" \
+    "$STAGE_DIR/wine/usr/lib/wine/i386-windows" \
+    "$STAGE_DIR/wine/usr/share/wine" \
+    "$STAGE_DIR/dxvk/x86_64-windows" \
+    "$STAGE_DIR/vkd3d/x86_64-windows" \
+    "$STAGE_DIR/nvapi/x86_64-windows"
+
+printf '#!/usr/bin/env bash\nexit 0\n' > "$STAGE_DIR/wine/usr/bin/wine"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$STAGE_DIR/wine/usr/bin/wineserver"
+chmod +x "$STAGE_DIR/wine/usr/bin/wine" "$STAGE_DIR/wine/usr/bin/wineserver"
+touch "$STAGE_DIR/wine/usr/lib/wine/x86_64-unix/ntdll.so"
+touch "$STAGE_DIR/wine/usr/lib/wine/x86_64-windows/kernel32.dll"
+touch "$STAGE_DIR/wine/usr/lib/wine/i386-windows/kernel32.dll"
+touch "$STAGE_DIR/wine/usr/share/wine/wine.inf"
+
+# Dummy DX11/DX12/NVAPI DLLs + forbidden d3d9.dll to verify strict filtering
+printf 'd3d11' > "$STAGE_DIR/dxvk/x86_64-windows/d3d11.dll"
+printf 'dxgi' > "$STAGE_DIR/dxvk/x86_64-windows/dxgi.dll"
+printf 'forbidden' > "$STAGE_DIR/dxvk/x86_64-windows/d3d9.dll"
+printf 'd3d12' > "$STAGE_DIR/vkd3d/x86_64-windows/d3d12.dll"
+printf 'd3d12core' > "$STAGE_DIR/vkd3d/x86_64-windows/d3d12core.dll"
+printf 'nvapi64' > "$STAGE_DIR/nvapi/x86_64-windows/nvapi64.dll"
+
+bash "$REPO_ROOT/scripts/package-runner.sh" \
+    --stage-dir "$STAGE_DIR" \
+    --out-dir "$OUT_DIR"
+
+source "$REPO_ROOT/versions.env"
+RUNNER_DIR="$OUT_DIR/$HYPERX_PROTON_VERSION"
+
+[[ -x "$RUNNER_DIR/proton" ]]
+[[ -f "$RUNNER_DIR/version" ]]
+[[ "$(tr -d '[:space:]' < "$RUNNER_DIR/version")" == "$HYPERX_PROTON_VERSION" ]]
+
+# Validate hyperx-native.json using python3 or jq
+python3 - "$RUNNER_DIR/hyperx-native.json" "$HYPERX_PROTON_VERSION" <<'PY'
+import json, sys
+with open(sys.argv[1], "r", encoding="utf-8") as f:
+    data = json.load(f)
+assert data["schema_version"] == 1
+assert data["runner_mode"] == "native"
+assert data["requires_steamrt"] is False
+assert data["version"] == sys.argv[2]
+PY
+
+# Verify required DLLs exist and forbidden d3d9.dll was excluded
+for dll in \
+    "files/lib/dxvk/x86_64-windows/d3d11.dll" \
+    "files/lib/dxvk/x86_64-windows/dxgi.dll" \
+    "files/lib/vkd3d-proton/x86_64-windows/d3d12.dll" \
+    "files/lib/vkd3d-proton/x86_64-windows/d3d12core.dll" \
+    "files/lib/nvapi/x86_64-windows/nvapi64.dll"; do
+    [[ -f "$RUNNER_DIR/$dll" ]] || { echo "Missing $dll"; exit 1; }
+done
+
+if find "$RUNNER_DIR" -name 'd3d9.dll' | grep -q .; then
+    echo "ERROR: forbidden d3d9.dll was copied into runner!"
+    exit 1
+fi
+
+[[ "$( "$RUNNER_DIR/proton" version )" == "$HYPERX_PROTON_VERSION" ]]
+"$RUNNER_DIR/proton" doctor
+
+echo "packaging_smoke.sh: ALL CHECKS PASSED"
