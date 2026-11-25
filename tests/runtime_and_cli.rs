@@ -87,6 +87,7 @@ fn build_runtime_env_enables_ntsync_when_device_present_and_respects_opt_out() {
     );
 
     let rt = build_runtime_env(runner, &layout, &host_env, true);
+    assert_eq!(rt.env.get("WINEARCH").map(String::as_str), Some("wow64"));
     assert_eq!(rt.env.get("PROTON_USE_NTSYNC").map(String::as_str), Some("1"));
     assert_eq!(rt.env.get("WINEFSYNC").map(String::as_str), Some("0"));
     assert_eq!(rt.env.get("WINEESYNC").map(String::as_str), Some("0"));

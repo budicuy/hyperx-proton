@@ -33,7 +33,13 @@ mkdir -p \
 
 printf '#!/usr/bin/env bash\nexit 0\n' > "$STAGE_DIR/wine/usr/bin/wine"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$STAGE_DIR/wine/usr/bin/wineserver"
-chmod +x "$STAGE_DIR/wine/usr/bin/wine" "$STAGE_DIR/wine/usr/bin/wineserver"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$STAGE_DIR/wine/usr/lib/wine/x86_64-unix/wine64"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$STAGE_DIR/wine/usr/lib/wine/x86_64-unix/wine64-preloader"
+chmod +x \
+    "$STAGE_DIR/wine/usr/bin/wine" \
+    "$STAGE_DIR/wine/usr/bin/wineserver" \
+    "$STAGE_DIR/wine/usr/lib/wine/x86_64-unix/wine64" \
+    "$STAGE_DIR/wine/usr/lib/wine/x86_64-unix/wine64-preloader"
 touch "$STAGE_DIR/wine/usr/lib/wine/x86_64-unix/ntdll.so"
 touch "$STAGE_DIR/wine/usr/lib/wine/x86_64-windows/kernel32.dll"
 touch "$STAGE_DIR/wine/usr/lib/wine/i386-windows/kernel32.dll"
@@ -69,14 +75,16 @@ assert data["requires_steamrt"] is False
 assert data["version"] == sys.argv[2]
 PY
 
-# Verify required DLLs exist and forbidden d3d9.dll was excluded
-for dll in \
+# Verify required DLLs and preloader_exec symlinks exist and forbidden d3d9.dll was excluded
+for path in \
+    "files/lib/wine/i386-unix/wine64" \
+    "files/lib/wine/i386-unix/wine64-preloader" \
     "files/lib/dxvk/x86_64-windows/d3d11.dll" \
     "files/lib/dxvk/x86_64-windows/dxgi.dll" \
     "files/lib/vkd3d-proton/x86_64-windows/d3d12.dll" \
     "files/lib/vkd3d-proton/x86_64-windows/d3d12core.dll" \
     "files/lib/nvapi/x86_64-windows/nvapi64.dll"; do
-    [[ -f "$RUNNER_DIR/$dll" ]] || { echo "Missing $dll"; exit 1; }
+    [[ -f "$RUNNER_DIR/$path" ]] || { echo "Missing $path"; exit 1; }
 done
 
 if find "$RUNNER_DIR" -name 'd3d9.dll' | grep -q .; then

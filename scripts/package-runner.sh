@@ -73,6 +73,19 @@ for sub in x86_64-unix x86_64-windows i386-windows; do
         cp -a "$WINE_STAGE/lib/wine/$sub" "$RUNNER_DIR/files/lib/wine/"
     fi
 done
+
+# wine-cachyos preloader_exec() rewrites x86_64-unix/wine to i386-unix/wine64{-preloader}
+# when spawning AMD64 child processes (e.g. wineboot, explorer, game subprocesses).
+# In a pure WoW64 build (no 32-bit Unix build), mirror wine64 + wine64-preloader into i386-unix/.
+for bin in wine64 wine64-preloader; do
+    if [[ ! -x "$RUNNER_DIR/files/lib/wine/x86_64-unix/$bin" ]]; then
+        echo "Missing staged Wine loader binary: files/lib/wine/x86_64-unix/$bin" >&2
+        exit 1
+    fi
+done
+mkdir -p "$RUNNER_DIR/files/lib/wine/i386-unix"
+ln -sfn ../x86_64-unix/wine64 "$RUNNER_DIR/files/lib/wine/i386-unix/wine64"
+ln -sfn ../x86_64-unix/wine64-preloader "$RUNNER_DIR/files/lib/wine/i386-unix/wine64-preloader"
 if [[ -d "$WINE_STAGE/share/wine" ]]; then
     cp -a "$WINE_STAGE/share/wine/." "$RUNNER_DIR/files/share/wine/"
 fi

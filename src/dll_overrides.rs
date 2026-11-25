@@ -6,6 +6,9 @@ const BASE_OVERRIDES: &[(&str, &str)] = &[
     ("d3d12", "n"),
     ("d3d12core", "n"),
     ("lsteamclient", "d"),
+    ("mscoree", "d"),
+    ("mshtml", "d"),
+    ("winemenubuilder.exe", "d"),
 ];
 
 fn normalize_dll_name(raw: &str) -> String {

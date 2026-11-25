@@ -73,6 +73,11 @@ pub fn run_doctor(runner_root: &Path) -> Vec<DoctorCheck> {
     for (name, rel) in [
         ("wine", "files/bin/wine"),
         ("wineserver", "files/bin/wineserver"),
+        ("wine:i386-unix/wine64", "files/lib/wine/i386-unix/wine64"),
+        (
+            "wine:i386-unix/wine64-preloader",
+            "files/lib/wine/i386-unix/wine64-preloader",
+        ),
         ("dxvk:d3d11.dll", "files/lib/dxvk/x86_64-windows/d3d11.dll"),
         ("dxvk:dxgi.dll", "files/lib/dxvk/x86_64-windows/dxgi.dll"),
         (

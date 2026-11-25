@@ -49,7 +49,10 @@ pub fn build_runtime_env(
         "WINEPREFIX".to_string(),
         layout.wineprefix.display().to_string(),
     );
-    env.insert("WINEARCH".to_string(), "win64".to_string());
+    // Pure WoW64 runner (no 32-bit Unix libs): WINEARCH=wow64 tells wine-cachyos
+    // loader to execute 32-bit Windows helpers via WoW64 thunks instead of
+    // looking for a separate 32-bit i386-unix/wine binary.
+    env.insert("WINEARCH".to_string(), "wow64".to_string());
 
     let nvapi_enabled = is_env_enabled(host_env, "PROTON_ENABLE_NVAPI")
         || is_env_enabled(host_env, "HYPERX_PROTON_NVAPI");

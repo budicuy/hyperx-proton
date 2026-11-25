@@ -70,6 +70,9 @@ fn merge_dll_overrides_preserves_user_overrides_and_adds_dx11_dx12() {
     assert!(merged.contains("d3d12=n"));
     assert!(merged.contains("d3d12core=n"));
     assert!(merged.contains("lsteamclient=d"));
+    assert!(merged.contains("mscoree=d"));
+    assert!(merged.contains("mshtml=d"));
+    assert!(merged.contains("winemenubuilder.exe=d"));
     assert!(!merged.contains("nvapi64=n"));
 
     let with_nvapi = merge_dll_overrides(None, true);
