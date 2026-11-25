@@ -23,12 +23,23 @@ mkdir -p "$OUT_DLL_DIR"
 
 export PATH="$STAGE_DIR/wine/usr/bin:$PATH"
 
+# Ubuntu 24.04 ships mingw-w64 11 whose <pathcch.h> declares PathCchCombineEx
+# without PATHCCH_NONE (added in mingw-w64 12). Probe cleanly so newer mingw-w64
+# enum definitions are never broken by a macro override.
+EXTRA_MESON_ARGS=()
+if ! printf '#include <pathcch.h>\nunsigned long x = PATHCCH_NONE;\n' \
+    | x86_64-w64-mingw32-gcc -fsyntax-only -x c - >/dev/null 2>&1; then
+    echo "[vkd3d] mingw-w64 <pathcch.h> lacks PATHCCH_NONE; defining fallback 0"
+    EXTRA_MESON_ARGS+=("-Dc_args=-DPATHCCH_NONE=0")
+fi
+
 meson setup "$VKD3D_OBJ" "$VKD3D_SRC" \
     --cross-file "$CROSS_FILE" \
     --buildtype=release \
     --prefix="$BUILD_DIR/install-vkd3d" \
     -Denable_tests=false \
-    -Denable_extras=false
+    -Denable_extras=false \
+    "${EXTRA_MESON_ARGS[@]}"
 
 ninja -C "$VKD3D_OBJ" -j"$(nproc)"
 
