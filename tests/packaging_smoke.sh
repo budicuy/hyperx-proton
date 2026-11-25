@@ -131,4 +131,42 @@ fi
 [[ "$( "$RUNNER_DIR/proton" version )" == "$HYPERX_PROTON_VERSION" ]]
 "$RUNNER_DIR/proton" doctor
 
+# Verify release manifest generation (latest.json + <asset>.sha256)
+TARBALL="$OUT_DIR/${HYPERX_PROTON_VERSION}.tar.zst"
+[[ -f "$TARBALL" ]] || { echo "Missing smoke tarball: $TARBALL (is zstd installed?)"; exit 1; }
+
+RELEASE_TAG="v${HYPERX_PROTON_VERSION#hyperx-proton-}"
+bash "$REPO_ROOT/scripts/generate-release-manifest.sh" \
+    --tarball "$TARBALL" \
+    --tag "$RELEASE_TAG" \
+    --out-dir "$OUT_DIR" \
+    --release-notes "Smoke test release"
+
+SHA256_FILE="${TARBALL}.sha256"
+MANIFEST_FILE="$OUT_DIR/latest.json"
+[[ -f "$SHA256_FILE" ]] || { echo "Missing checksum file: $SHA256_FILE"; exit 1; }
+[[ -f "$MANIFEST_FILE" ]] || { echo "Missing manifest file: $MANIFEST_FILE"; exit 1; }
+
+(cd "$OUT_DIR" && sha256sum -c "$(basename "$SHA256_FILE")")
+
+EXPECTED_SHA256="$(sha256sum "$TARBALL" | awk '{print $1}')"
+python3 - "$MANIFEST_FILE" "$HYPERX_PROTON_VERSION" "$RELEASE_TAG" "$EXPECTED_SHA256" "$(basename "$TARBALL")" <<'PY'
+import json, re, sys
+manifest_path, expected_ver, expected_tag, expected_sha, expected_asset = sys.argv[1:6]
+with open(manifest_path, "r", encoding="utf-8") as f:
+    data = json.load(f)
+assert data["schema_version"] == 1, data
+assert data["version"] == expected_ver, data
+assert data["tag"] == expected_tag, data
+assert data["asset_name"] == expected_asset, data
+assert re.fullmatch(r"[0-9a-f]{64}", data["sha256"]), data["sha256"]
+assert data["sha256"] == expected_sha, (data["sha256"], expected_sha)
+assert isinstance(data["size_bytes"], int) and data["size_bytes"] > 0, data["size_bytes"]
+assert "budicuy/hyperx-proton/releases/download/" in data["download_url"], data["download_url"]
+assert data["download_url"].endswith(f"/{expected_tag}/{expected_asset}"), data["download_url"]
+assert data["min_glibc"] == "2.38", data["min_glibc"]
+assert isinstance(data["published_at"], str) and data["published_at"].endswith("Z"), data["published_at"]
+assert data["release_notes"] == "Smoke test release", data["release_notes"]
+PY
+
 echo "packaging_smoke.sh: ALL CHECKS PASSED"

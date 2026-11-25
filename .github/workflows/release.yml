@@ -1,0 +1,148 @@
+name: Release HyperX-Proton
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release tag (optional; defaults to v<HYPERX_PROTON_VERSION> from versions.env)'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate release tag against versions.env
+        shell: bash
+        run: |
+          set -euo pipefail
+          source versions.env
+          EXPECTED_TAG="v${HYPERX_PROTON_VERSION#hyperx-proton-}"
+
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            RELEASE_TAG="${GITHUB_REF_NAME}"
+          else
+            INPUT_TAG="${{ inputs.tag_name }}"
+            if [[ -n "$INPUT_TAG" ]]; then
+              RELEASE_TAG="$INPUT_TAG"
+            else
+              RELEASE_TAG="$EXPECTED_TAG"
+            fi
+          fi
+
+          if [[ "$RELEASE_TAG" != "$EXPECTED_TAG" ]]; then
+            echo "ERROR: release tag '$RELEASE_TAG' does not match versions.env expected tag '$EXPECTED_TAG' (HYPERX_PROTON_VERSION=$HYPERX_PROTON_VERSION)" >&2
+            exit 1
+          fi
+
+          echo "RELEASE_TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
+          echo "HYPERX_PROTON_VERSION=$HYPERX_PROTON_VERSION" >> "$GITHUB_ENV"
+
+      - name: Install Ubuntu 24.04 build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            mingw-w64 \
+            meson \
+            ninja-build \
+            glslang-tools \
+            bison \
+            flex \
+            ccache \
+            zstd \
+            curl \
+            unzip \
+            python3 \
+            pkg-config \
+            binutils \
+            libvulkan-dev \
+            libgnutls28-dev \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            libfreetype-dev \
+            libfontconfig-dev \
+            libpulse-dev \
+            libudev-dev \
+            libusb-1.0-0-dev \
+            libx11-dev \
+            libxext-dev \
+            libwayland-dev \
+            wayland-protocols \
+            libxkbcommon-dev \
+            libxkbregistry-dev \
+            libsdl2-dev \
+            libdrm-dev
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-ubuntu-24.04-${{ hashFiles('versions.env', 'scripts/*.sh') }}
+          restore-keys: |
+            ccache-ubuntu-24.04-
+
+      - name: Cache Cargo target
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: cargo-target-ubuntu-24.04-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
+          restore-keys: |
+            cargo-target-ubuntu-24.04-
+
+      - name: Run Rust unit and integration tests
+        run: cargo test
+
+      - name: Build HyperX-Proton components
+        run: ./scripts/build.sh
+
+      - name: Package runner
+        run: ./scripts/package-runner.sh
+
+      - name: Run packaging smoke tests
+        run: bash tests/packaging_smoke.sh
+
+      - name: Audit ELF DT_NEEDED dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUNNER_DIR="dist/${HYPERX_PROTON_VERSION}"
+          while IFS= read -r -d '' elf; do
+            if [[ "$(od -An -tx1 -N4 "$elf" 2>/dev/null | tr -d ' \n')" == "7f454c46" ]]; then
+              if readelf -d "$elf" | grep -E '\(NEEDED\).*(libav|libunwind)'; then
+                echo "ERROR: forbidden DT_NEEDED dependency found in $elf" >&2
+                exit 1
+              fi
+            fi
+          done < <(find "$RUNNER_DIR/proton" "$RUNNER_DIR/files/bin" "$RUNNER_DIR/files/lib/wine/x86_64-unix" -type f -print0)
+          echo "ELF audit passed: zero libav*/libunwind* DT_NEEDED dependencies."
+
+      - name: Generate release manifest and checksum
+        run: |
+          ./scripts/generate-release-manifest.sh \
+            --tarball "dist/${HYPERX_PROTON_VERSION}.tar.zst" \
+            --tag "${RELEASE_TAG}" \
+            --repo "${{ github.repository }}" \
+            --out-dir dist
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: HyperX-Proton ${{ env.RELEASE_TAG }}
+          files: |
+            dist/${{ env.HYPERX_PROTON_VERSION }}.tar.zst
+            dist/${{ env.HYPERX_PROTON_VERSION }}.tar.zst.sha256
+            dist/latest.json
