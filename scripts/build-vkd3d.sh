@@ -21,6 +21,8 @@ write_mingw64_cross_file "$CROSS_FILE"
 rm -rf "$VKD3D_OBJ" "$STAGE_DIR/vkd3d"
 mkdir -p "$OUT_DLL_DIR"
 
+export PATH="$STAGE_DIR/wine/usr/bin:$PATH"
+
 meson setup "$VKD3D_OBJ" "$VKD3D_SRC" \
     --cross-file "$CROSS_FILE" \
     --buildtype=release \

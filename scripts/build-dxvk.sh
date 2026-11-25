@@ -29,8 +29,7 @@ meson setup "$DXVK_OBJ" "$DXVK_SRC" \
     -Denable_d3d9=false \
     -Denable_d3d10=false \
     -Denable_d3d11=true \
-    -Denable_dxgi=true \
-    -Denable_tests=false
+    -Denable_dxgi=true
 
 ninja -C "$DXVK_OBJ" -j"$(nproc)"
 

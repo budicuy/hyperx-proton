@@ -36,6 +36,11 @@ fi
 export CFLAGS="-O2 -march=${HYPERX_MARCH} -pipe"
 export CXXFLAGS="-O2 -march=${HYPERX_MARCH} -pipe"
 
+if [[ ! -x "$WINE_SRC/configure" ]]; then
+    echo "[wine] running autogen.sh"
+    (cd "$WINE_SRC" && ./autogen.sh)
+fi
+
 cd "$WINE_OBJ"
 "$WINE_SRC/configure" \
     --prefix=/usr \
