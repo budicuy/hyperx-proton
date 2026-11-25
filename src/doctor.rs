@@ -78,6 +78,19 @@ pub fn run_doctor(runner_root: &Path) -> Vec<DoctorCheck> {
             "wine:i386-unix/wine64-preloader",
             "files/lib/wine/i386-unix/wine64-preloader",
         ),
+        ("shim:steam.exe", "files/lib/wine/x86_64-windows/steam.exe"),
+        (
+            "icu:x86_64/icuuc68.dll",
+            "files/lib/wine/icu/x86_64-windows/icuuc68.dll",
+        ),
+        (
+            "icu:x86_64/icuin68.dll",
+            "files/lib/wine/icu/x86_64-windows/icuin68.dll",
+        ),
+        (
+            "icu:x86_64/icudt68.dll",
+            "files/lib/wine/icu/x86_64-windows/icudt68.dll",
+        ),
         ("dxvk:d3d11.dll", "files/lib/dxvk/x86_64-windows/d3d11.dll"),
         ("dxvk:dxgi.dll", "files/lib/dxvk/x86_64-windows/dxgi.dll"),
         (

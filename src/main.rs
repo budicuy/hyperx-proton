@@ -95,10 +95,34 @@ fn run_launch(runner_root: &Path, wait_for_exit: bool, args: &[String]) -> Resul
             sync_prefix_dlls(runner_root, &layout, &manifest.version, rt.nvapi_enabled)?;
     }
 
-    let status = Command::new(&rt.wine_bin)
+    let mut launch_env = rt.env.clone();
+    let exe_lower = exe.to_ascii_lowercase();
+    if exe_lower.contains("client-win64-shipping.exe")
+        && (exe_lower.contains("wuwa") || exe_lower.contains("wuthering"))
+    {
+        // Enable wine-cachyos built-in opaque CEF WebView fix for Wuthering Waves login.
+        launch_env
+            .entry("SteamGameId".to_string())
+            .or_insert_with(|| "3513350".to_string());
+    }
+
+    let disable_steam_shim = launch_env
+        .get("HYPERX_PROTON_NO_STEAM_SHIM")
+        .map(String::as_str)
+        == Some("1");
+    let has_steam_shim = layout
+        .wineprefix
+        .join("drive_c/windows/system32/steam.exe")
+        .is_file();
+
+    let mut cmd = Command::new(&rt.wine_bin);
+    if has_steam_shim && !disable_steam_shim {
+        cmd.arg("C:\\windows\\system32\\steam.exe");
+    }
+    let status = cmd
         .arg(exe)
         .args(exe_args)
-        .envs(&rt.env)
+        .envs(&launch_env)
         .status()
         .map_err(|err| format!("failed to execute {}: {err}", rt.wine_bin.display()))?;
 

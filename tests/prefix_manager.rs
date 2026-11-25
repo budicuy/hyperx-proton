@@ -25,6 +25,23 @@ fn prepare_prefix_preserves_existing_registry_and_user_files() {
     fs::create_dir_all(runner.join("files/lib/dxvk/x86_64-windows")).unwrap();
     fs::create_dir_all(runner.join("files/lib/vkd3d-proton/x86_64-windows")).unwrap();
     fs::create_dir_all(runner.join("files/lib/nvapi/x86_64-windows")).unwrap();
+    fs::create_dir_all(runner.join("files/lib/wine/icu/x86_64-windows")).unwrap();
+    fs::create_dir_all(runner.join("files/lib/wine/icu/i386-windows")).unwrap();
+    fs::create_dir_all(runner.join("files/lib/wine/x86_64-windows")).unwrap();
+    for arch in ["x86_64-windows", "i386-windows"] {
+        for dll in ["icudt68.dll", "icuin68.dll", "icuuc68.dll"] {
+            fs::write(
+                runner.join(format!("files/lib/wine/icu/{arch}/{dll}")),
+                dll.as_bytes(),
+            )
+            .unwrap();
+        }
+    }
+    fs::write(
+        runner.join("files/lib/wine/x86_64-windows/steam.exe"),
+        b"STEAM_SHIM",
+    )
+    .unwrap();
     fs::write(
         runner.join("files/lib/dxvk/x86_64-windows/d3d11.dll"),
         b"DXVK_D3D11",
@@ -78,6 +95,12 @@ fn prepare_prefix_preserves_existing_registry_and_user_files() {
         fs::read(sys32.join("d3d12core.dll")).unwrap(),
         b"VKD3D_CORE"
     );
+    assert_eq!(fs::read(sys32.join("icuuc68.dll")).unwrap(), b"icuuc68.dll");
+    assert_eq!(
+        fs::read(pfx.join("drive_c/windows/syswow64/icuuc68.dll")).unwrap(),
+        b"icuuc68.dll"
+    );
+    assert_eq!(fs::read(sys32.join("steam.exe")).unwrap(), b"STEAM_SHIM");
     assert!(!sys32.join("nvapi64.dll").exists());
     assert_eq!(
         fs::read_to_string(compat.join("version")).unwrap().trim(),

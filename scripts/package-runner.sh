@@ -40,6 +40,8 @@ rm -rf "$RUNNER_DIR"
 mkdir -p \
     "$RUNNER_DIR/files/bin" \
     "$RUNNER_DIR/files/lib/wine" \
+    "$RUNNER_DIR/files/lib/wine/icu/x86_64-windows" \
+    "$RUNNER_DIR/files/lib/wine/icu/i386-windows" \
     "$RUNNER_DIR/files/lib/dxvk/x86_64-windows" \
     "$RUNNER_DIR/files/lib/vkd3d-proton/x86_64-windows" \
     "$RUNNER_DIR/files/lib/nvapi/x86_64-windows" \
@@ -106,6 +108,20 @@ done
 NVAPI_SRC="$ARG_STAGE_DIR/nvapi/x86_64-windows/nvapi64.dll"
 [[ -f "$NVAPI_SRC" ]] || { echo "Missing staged NVAPI DLL: $NVAPI_SRC" >&2; exit 1; }
 cp -f "$NVAPI_SRC" "$RUNNER_DIR/files/lib/nvapi/x86_64-windows/nvapi64.dll"
+
+# ICU 68.2 DLLs required by wine-cachyos icu.dll forwarders (e.g. .NET/Sharphereal in WuWa)
+for arch in x86_64-windows i386-windows; do
+    for dll in icudt68.dll icuin68.dll icuuc68.dll; do
+        src="$ARG_STAGE_DIR/icu/$arch/$dll"
+        [[ -f "$src" ]] || { echo "Missing staged ICU DLL: $src" >&2; exit 1; }
+        cp -f "$src" "$RUNNER_DIR/files/lib/wine/icu/$arch/$dll"
+    done
+done
+
+# Minimal native steam.exe child-launcher shim (required by HoYoProtect AC on Linux)
+SHIM_SRC="$ARG_STAGE_DIR/shim/x86_64-windows/steam.exe"
+[[ -f "$SHIM_SRC" ]] || { echo "Missing staged steam.exe shim: $SHIM_SRC" >&2; exit 1; }
+cp -f "$SHIM_SRC" "$RUNNER_DIR/files/lib/wine/x86_64-windows/steam.exe"
 
 TARBALL="$ARG_OUT_DIR/${HYPERX_PROTON_VERSION}.tar.zst"
 if command -v zstd >/dev/null 2>&1; then

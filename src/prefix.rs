@@ -62,22 +62,29 @@ pub struct PrefixSyncReport {
     pub needs_wineboot: bool,
 }
 
-fn target_dlls(runner_root: &Path, enable_nvapi: bool) -> Vec<(PathBuf, &'static str)> {
+fn target_prefix_files(
+    runner_root: &Path,
+    enable_nvapi: bool,
+) -> Vec<(PathBuf, &'static str, &'static str)> {
     let mut list = vec![
         (
             runner_root.join("files/lib/dxvk/x86_64-windows/d3d11.dll"),
+            "drive_c/windows/system32",
             "d3d11.dll",
         ),
         (
             runner_root.join("files/lib/dxvk/x86_64-windows/dxgi.dll"),
+            "drive_c/windows/system32",
             "dxgi.dll",
         ),
         (
             runner_root.join("files/lib/vkd3d-proton/x86_64-windows/d3d12.dll"),
+            "drive_c/windows/system32",
             "d3d12.dll",
         ),
         (
             runner_root.join("files/lib/vkd3d-proton/x86_64-windows/d3d12core.dll"),
+            "drive_c/windows/system32",
             "d3d12core.dll",
         ),
     ];
@@ -85,8 +92,28 @@ fn target_dlls(runner_root: &Path, enable_nvapi: bool) -> Vec<(PathBuf, &'static
     if enable_nvapi {
         list.push((
             runner_root.join("files/lib/nvapi/x86_64-windows/nvapi64.dll"),
+            "drive_c/windows/system32",
             "nvapi64.dll",
         ));
+    }
+
+    // ICU 68.2 DLLs required by wine-cachyos icu.dll forwarders (.NET / Sharphereal).
+    for (arch_dir, dest_dir) in [
+        ("files/lib/wine/icu/x86_64-windows", "drive_c/windows/system32"),
+        ("files/lib/wine/icu/i386-windows", "drive_c/windows/syswow64"),
+    ] {
+        let src_dir = runner_root.join(arch_dir);
+        if src_dir.is_dir() {
+            for dll in ["icudt68.dll", "icuin68.dll", "icuuc68.dll"] {
+                list.push((src_dir.join(dll), dest_dir, dll));
+            }
+        }
+    }
+
+    // Native steam.exe child-launcher shim (required by HoYoProtect AC on Linux).
+    let steam_shim = runner_root.join("files/lib/wine/x86_64-windows/steam.exe");
+    if steam_shim.is_file() {
+        list.push((steam_shim, "drive_c/windows/system32", "steam.exe"));
     }
 
     list
@@ -225,17 +252,24 @@ pub fn sync_prefix_dlls(
     let version_changed = current_stamp.as_deref() != Some(runner_version);
     let system_reg_missing = !layout.wineprefix.join("system.reg").is_file();
 
-    let dlls = target_dlls(runner_root, enable_nvapi);
+    let dlls = target_prefix_files(runner_root, enable_nvapi);
     let all_dlls_present = dlls
         .iter()
-        .all(|(_, name)| is_regular_file(&sys32.join(name)));
+        .all(|(_, dest_dir, name)| is_regular_file(&layout.wineprefix.join(dest_dir).join(name)));
 
     let dlls_updated = if version_changed || !all_dlls_present {
-        for (src, name) in &dlls {
+        for (src, dest_dir, name) in &dlls {
             if !src.is_file() {
-                return Err(format!("missing bundled DLL: {}", src.display()));
+                return Err(format!("missing bundled runtime file: {}", src.display()));
             }
-            let dst = sys32.join(name);
+            let target_dir = layout.wineprefix.join(dest_dir);
+            fs::create_dir_all(&target_dir).map_err(|err| {
+                format!(
+                    "failed to create prefix dir {}: {err}",
+                    target_dir.display()
+                )
+            })?;
+            let dst = target_dir.join(name);
             remove_existing_if_present(&dst)?;
             fs::copy(src, &dst).map_err(|err| {
                 format!(

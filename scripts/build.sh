@@ -12,7 +12,7 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         -h|--help)
-            echo "Usage: $0 [--component all|rust|wine|dxvk|vkd3d|nvapi]"
+            echo "Usage: $0 [--component all|rust|wine|dxvk|vkd3d|nvapi|icu|shim]"
             exit 0
             ;;
         *)
@@ -43,12 +43,14 @@ build_rust() {
 
 case "$COMPONENT" in
     all)
-        check_tools cargo x86_64-w64-mingw32-gcc meson ninja glslangValidator bison flex
+        check_tools cargo x86_64-w64-mingw32-gcc meson ninja glslangValidator bison flex curl unzip
         build_rust
         bash "$SCRIPTS_DIR/build-wine.sh"
         bash "$SCRIPTS_DIR/build-dxvk.sh"
         bash "$SCRIPTS_DIR/build-vkd3d.sh"
         bash "$SCRIPTS_DIR/build-nvapi.sh"
+        bash "$SCRIPTS_DIR/build-icu.sh"
+        bash "$SCRIPTS_DIR/build-shim.sh"
         ;;
     rust)
         build_rust
@@ -68,6 +70,14 @@ case "$COMPONENT" in
     nvapi)
         check_tools x86_64-w64-mingw32-gcc meson ninja
         bash "$SCRIPTS_DIR/build-nvapi.sh"
+        ;;
+    icu)
+        check_tools curl unzip
+        bash "$SCRIPTS_DIR/build-icu.sh"
+        ;;
+    shim)
+        check_tools x86_64-w64-mingw32-gcc
+        bash "$SCRIPTS_DIR/build-shim.sh"
         ;;
     *)
         echo "Unknown component: $COMPONENT" >&2

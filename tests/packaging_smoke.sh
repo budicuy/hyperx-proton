@@ -29,7 +29,10 @@ mkdir -p \
     "$STAGE_DIR/wine/usr/share/wine" \
     "$STAGE_DIR/dxvk/x86_64-windows" \
     "$STAGE_DIR/vkd3d/x86_64-windows" \
-    "$STAGE_DIR/nvapi/x86_64-windows"
+    "$STAGE_DIR/nvapi/x86_64-windows" \
+    "$STAGE_DIR/icu/x86_64-windows" \
+    "$STAGE_DIR/icu/i386-windows" \
+    "$STAGE_DIR/shim/x86_64-windows"
 
 printf '#!/usr/bin/env bash\nexit 0\n' > "$STAGE_DIR/wine/usr/bin/wine"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$STAGE_DIR/wine/usr/bin/wineserver"
@@ -52,6 +55,12 @@ printf 'forbidden' > "$STAGE_DIR/dxvk/x86_64-windows/d3d9.dll"
 printf 'd3d12' > "$STAGE_DIR/vkd3d/x86_64-windows/d3d12.dll"
 printf 'd3d12core' > "$STAGE_DIR/vkd3d/x86_64-windows/d3d12core.dll"
 printf 'nvapi64' > "$STAGE_DIR/nvapi/x86_64-windows/nvapi64.dll"
+for arch in x86_64-windows i386-windows; do
+    for dll in icudt68.dll icuin68.dll icuuc68.dll; do
+        printf '%s' "$dll" > "$STAGE_DIR/icu/$arch/$dll"
+    done
+done
+printf 'steam-shim' > "$STAGE_DIR/shim/x86_64-windows/steam.exe"
 
 bash "$REPO_ROOT/scripts/package-runner.sh" \
     --stage-dir "$STAGE_DIR" \
@@ -79,6 +88,13 @@ PY
 for path in \
     "files/lib/wine/i386-unix/wine64" \
     "files/lib/wine/i386-unix/wine64-preloader" \
+    "files/lib/wine/x86_64-windows/steam.exe" \
+    "files/lib/wine/icu/x86_64-windows/icudt68.dll" \
+    "files/lib/wine/icu/x86_64-windows/icuin68.dll" \
+    "files/lib/wine/icu/x86_64-windows/icuuc68.dll" \
+    "files/lib/wine/icu/i386-windows/icudt68.dll" \
+    "files/lib/wine/icu/i386-windows/icuin68.dll" \
+    "files/lib/wine/icu/i386-windows/icuuc68.dll" \
     "files/lib/dxvk/x86_64-windows/d3d11.dll" \
     "files/lib/dxvk/x86_64-windows/dxgi.dll" \
     "files/lib/vkd3d-proton/x86_64-windows/d3d12.dll" \

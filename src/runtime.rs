@@ -73,6 +73,11 @@ pub fn build_runtime_env(
         env.insert("WINEFSYNC".to_string(), "1".to_string());
     }
 
+    // Avoid Vulkan OPWR login-webview input stalls and d3dcompiler issues
+    // (matches Proton-CachyOS fixes for WuWa, Genshin, and ZZZ) unless overridden.
+    env.entry("WINE_DISABLE_VULKAN_OPWR".to_string())
+        .or_insert_with(|| "1".to_string());
+
     if is_env_enabled(host_env, "PROTON_ENABLE_WAYLAND")
         && host_env
             .get("WAYLAND_DISPLAY")
