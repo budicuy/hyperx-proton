@@ -21,7 +21,21 @@ fn builtin_rules_match_wuwa_and_hoyoverse_with_conditional_steam_shim() {
 
     let hsr = evaluate_rules(&rules, "/games/HSR/StarRail.exe", &empty_env);
     assert_eq!(hsr.matched_rule_ids, vec!["honkai-star-rail"]);
+    assert_eq!(hsr.env.get("STUB_WINTRUST").map(String::as_str), Some("1"));
+    assert!(hsr.dll_overrides.contains(&"jsproxy=n,b".to_string()));
     assert!(should_use_steam_shim(&hsr, &empty_env, true));
+
+    // Explicit user env and WINEDLLOVERRIDES still beat the HSR rule
+    let mut user_env = BTreeMap::new();
+    user_env.insert("STUB_WINTRUST".to_string(), "0".to_string());
+    let mut effective_env = hsr.env.clone();
+    for (k, v) in &user_env {
+        effective_env.insert(k.clone(), v.clone());
+    }
+    assert_eq!(effective_env.get("STUB_WINTRUST").map(String::as_str), Some("0"));
+    let merged_overrides = merge_dll_overrides_with_extras(Some("jsproxy=d"), &hsr.dll_overrides, true);
+    assert!(merged_overrides.contains("jsproxy=d"));
+    assert!(!merged_overrides.contains("jsproxy=n,b"));
 
     let mut no_shim = BTreeMap::new();
     no_shim.insert("HYPERX_PROTON_NO_STEAM_SHIM".to_string(), "1".to_string());
