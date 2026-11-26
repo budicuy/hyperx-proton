@@ -9,7 +9,7 @@ Pure native, universal `x86-64` Proton runner built in Rust for Linux (`glibc >=
 - **3-Tier Kernel Sync:** Automatic runtime detection in priority order: `ntsync` (`/dev/ntsync`) → `fsync` (`futex_waitv`) → `esync` (`WINEESYNC=1`), with plain `wineserver` sync as final fallback.
 - **Native Game Rule Engine:** Built-in rules (Wuthering Waves, Honkai: Star Rail, Genshin Impact, Zenless Zone Zero) with conditional `steam.exe` shim and drop-in user JSON rules (`$XDG_CONFIG_HOME/hyperx-proton/rules/*.json`).
 - **Steam Scout & Prefix Compatibility:** Automatically sanitizes injected `steam-runtime` / `ubuntu12_*` `LD_LIBRARY_PATH` entries (preserving `LD_PRELOAD` for overlays/MangoHud), supports `proton runinprefix` for redistributables and prefix helpers (`protontricks`, Winecfg/Winetricks), and guards prefix DLL sync with `flock` (using Btrfs `FICLONE` reflink when available).
-- **Upstream Pins:** Single source of truth in [`versions.env`](versions.env) (`hyperx-proton-11.0-20261125`).
+- **Upstream Pins:** Single source of truth in [`versions.env`](versions.env) (`hyperx-proton-11.0-20261126`).
 
 ## System Requirements
 
@@ -79,7 +79,7 @@ After building and packaging (`./scripts/build.sh && ./scripts/package-runner.sh
   ```
 
 - **Lutris:**
-  Extract the packaged runner directory (`dist/hyperx-proton-11.0-20261125`) into `~/.local/share/lutris/runners/wine/`.
+  Extract the packaged runner directory (`dist/hyperx-proton-11.0-20261126`) into `~/.local/share/lutris/runners/wine/`.
 
 ## Environment Variables & Custom JSON Rules
 
