@@ -28,7 +28,6 @@ mkdir -p \
     "$STAGE_DIR/wine/usr/lib/wine/i386-windows" \
     "$STAGE_DIR/wine/usr/share/wine" \
     "$STAGE_DIR/dxvk/x86_64-windows" \
-    "$STAGE_DIR/dxvk-sarek/x86_64-windows" \
     "$STAGE_DIR/vkd3d/x86_64-windows" \
     "$STAGE_DIR/nvapi/x86_64-windows" \
     "$STAGE_DIR/icu/x86_64-windows" \
@@ -55,10 +54,6 @@ touch "$STAGE_DIR/wine/usr/share/wine/wine.inf"
 printf 'd3d11' > "$STAGE_DIR/dxvk/x86_64-windows/d3d11.dll"
 printf 'dxgi' > "$STAGE_DIR/dxvk/x86_64-windows/dxgi.dll"
 printf 'forbidden' > "$STAGE_DIR/dxvk/x86_64-windows/d3d9.dll"
-printf 'sarek-d3d11' > "$STAGE_DIR/dxvk-sarek/x86_64-windows/d3d11.dll"
-printf 'sarek-dxgi' > "$STAGE_DIR/dxvk-sarek/x86_64-windows/dxgi.dll"
-printf 'forbidden' > "$STAGE_DIR/dxvk-sarek/x86_64-windows/d3d9.dll"
-printf 'forbidden' > "$STAGE_DIR/dxvk-sarek/x86_64-windows/ddraw.dll"
 printf 'd3d12' > "$STAGE_DIR/vkd3d/x86_64-windows/d3d12.dll"
 printf 'd3d12core' > "$STAGE_DIR/vkd3d/x86_64-windows/d3d12core.dll"
 printf 'nvapi64' > "$STAGE_DIR/nvapi/x86_64-windows/nvapi64.dll"
@@ -89,7 +84,6 @@ assert data["schema_version"] == 1
 assert data["runner_mode"] == "native"
 assert data["requires_steamrt"] is False
 assert data["version"] == sys.argv[2]
-assert "dxvk_sarek" in data["components"]
 PY
 
 # Verify Valve/Heroic VDF metadata exists, matches version & commandline, and has NO require_tool_appid
@@ -115,8 +109,6 @@ for path in \
     "files/lib/wine/icu/i386-windows/icuuc68.dll" \
     "files/lib/dxvk/x86_64-windows/d3d11.dll" \
     "files/lib/dxvk/x86_64-windows/dxgi.dll" \
-    "files/lib/dxvk-sarek/x86_64-windows/d3d11.dll" \
-    "files/lib/dxvk-sarek/x86_64-windows/dxgi.dll" \
     "files/lib/vkd3d-proton/x86_64-windows/d3d12.dll" \
     "files/lib/vkd3d-proton/x86_64-windows/d3d12core.dll" \
     "files/lib/nvapi/x86_64-windows/nvapi64.dll"; do

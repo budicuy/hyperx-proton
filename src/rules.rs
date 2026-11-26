@@ -4,8 +4,6 @@ use std::path::{Component, Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::gpu::DxvkBackend;
-
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct GameRule {
     pub id: String,
@@ -20,8 +18,6 @@ pub struct GameRule {
     pub dll_overrides: Vec<String>,
     #[serde(default)]
     pub use_steam_shim: Option<bool>,
-    #[serde(default)]
-    pub dxvk_backend: Option<String>,
     #[serde(default)]
     pub ensure_files: Vec<EnsureFileRule>,
 }
@@ -57,14 +53,13 @@ pub struct RuleEvaluation {
     pub env: BTreeMap<String, String>,
     pub dll_overrides: Vec<String>,
     pub use_steam_shim: Option<bool>,
-    pub dxvk_backend: Option<DxvkBackend>,
     pub ensure_files: Vec<EnsureFileRule>,
 }
 
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum RuleFilePayload {
-    Single(GameRule),
+    Single(Box<GameRule>),
     Multiple(Vec<GameRule>),
 }
 
@@ -82,7 +77,6 @@ pub fn builtin_rules() -> Vec<GameRule> {
             env: BTreeMap::new(),
             dll_overrides: vec!["KRSDKExternal.exe=d".to_string()],
             use_steam_shim: Some(false),
-            dxvk_backend: None,
             ensure_files: vec![
                 EnsureFileRule {
                     if_exists_rel:
@@ -113,7 +107,6 @@ pub fn builtin_rules() -> Vec<GameRule> {
             env: BTreeMap::new(),
             dll_overrides: Vec::new(),
             use_steam_shim: Some(true),
-            dxvk_backend: None,
             ensure_files: Vec::new(),
         },
         GameRule {
@@ -128,7 +121,6 @@ pub fn builtin_rules() -> Vec<GameRule> {
             env: BTreeMap::new(),
             dll_overrides: Vec::new(),
             use_steam_shim: Some(true),
-            dxvk_backend: None,
             ensure_files: Vec::new(),
         },
         GameRule {
@@ -143,7 +135,6 @@ pub fn builtin_rules() -> Vec<GameRule> {
             env: BTreeMap::new(),
             dll_overrides: Vec::new(),
             use_steam_shim: Some(true),
-            dxvk_backend: None,
             ensure_files: Vec::new(),
         },
     ]
@@ -235,7 +226,7 @@ pub fn load_rules(host_env: &BTreeMap<String, String>) -> LoadedRules {
         };
 
         let parsed = match serde_json::from_str::<RuleFilePayload>(&raw) {
-            Ok(RuleFilePayload::Single(rule)) => vec![rule],
+            Ok(RuleFilePayload::Single(rule)) => vec![*rule],
             Ok(RuleFilePayload::Multiple(list)) => list,
             Err(err) => {
                 warnings.push(format!(
@@ -339,11 +330,6 @@ pub fn evaluate_rules(
         }
         if let Some(use_shim) = rule.use_steam_shim {
             eval.use_steam_shim = Some(use_shim);
-        }
-        if let Some(backend_raw) = &rule.dxvk_backend
-            && let Some(backend) = DxvkBackend::parse(backend_raw)
-        {
-            eval.dxvk_backend = Some(backend);
         }
         for ef in &rule.ensure_files {
             if seen_ensure_rels.insert(ef.create_rel.clone()) {

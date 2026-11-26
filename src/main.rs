@@ -1,9 +1,7 @@
 use hyperx_proton::config::{PrefixLayout, load_manifest, resolve_prefix_layout};
 use hyperx_proton::doctor::{CheckSeverity, run_doctor};
-use hyperx_proton::gpu::{DxvkBackend, choose_dxvk_backend, is_sarek_bundled, probe_primary_gpu};
 use hyperx_proton::prefix::{
-    acquire_prefix_lock, prefix_needs_wineboot, prune_foreign_runner_symlinks,
-    sync_prefix_dlls_with_options,
+    acquire_prefix_lock, prefix_needs_wineboot, prune_foreign_runner_symlinks, sync_prefix_dlls,
 };
 use hyperx_proton::rules::{
     RuleEvaluation, apply_ensure_files, evaluate_rules, load_rules, should_use_steam_shim,
@@ -77,7 +75,6 @@ fn ensure_prefix_ready(
     layout: &PrefixLayout,
     manifest_version: &str,
     rt: &RuntimeEnv,
-    dxvk_backend: DxvkBackend,
 ) -> Result<(), String> {
     let _lock = acquire_prefix_lock(&layout.lock_file)?;
     let needs_boot = prefix_needs_wineboot(runner_root, layout, manifest_version);
@@ -113,13 +110,12 @@ fn ensure_prefix_ready(
     }
 
     // Copy DX11/DX12 (and opt-in NVAPI) DLLs AFTER wineboot so wineboot cannot
-    // overwrite them with Wine builtin stubs, and stamp version/backend only on success.
-    let _report = sync_prefix_dlls_with_options(
+    // overwrite them with Wine builtin stubs, and stamp version only on success.
+    let _report = sync_prefix_dlls(
         runner_root,
         layout,
         manifest_version,
         rt.nvapi_enabled,
-        dxvk_backend,
     )?;
     Ok(())
 }
@@ -136,32 +132,18 @@ fn run_in_prefix(runner_root: &Path, args: &[String]) -> Result<i32, String> {
     let layout = resolve_prefix_layout(compat_env.as_deref(), prefix_env.as_deref())?;
 
     let host_env: BTreeMap<String, String> = env::vars().collect();
-    let gpu_probe = probe_primary_gpu(&host_env);
-    let dxvk_sel = choose_dxvk_backend(
-        &gpu_probe,
-        host_env.get("HYPERX_PROTON_DXVK_BACKEND").map(String::as_str),
-        None,
-        is_sarek_bundled(runner_root),
-    );
     let rt = build_runtime_env_with_sync(
         runner_root,
         &layout,
         &host_env,
         is_ntsync_available(),
         is_fsync_available(),
-        &gpu_probe,
         &RuleEvaluation::default(),
     );
 
     let _ = raise_nofile_limit(TARGET_NOFILE_SOFT);
 
-    ensure_prefix_ready(
-        runner_root,
-        &layout,
-        &manifest.version,
-        &rt,
-        dxvk_sel.backend,
-    )?;
+    ensure_prefix_ready(runner_root, &layout, &manifest.version, &rt)?;
 
     let status = Command::new(&rt.wine_bin)
         .arg(exe)
@@ -185,21 +167,11 @@ fn run_launch(runner_root: &Path, wait_for_exit: bool, args: &[String]) -> Resul
     let layout = resolve_prefix_layout(compat_env.as_deref(), prefix_env.as_deref())?;
 
     let host_env: BTreeMap<String, String> = env::vars().collect();
-    let gpu_probe = probe_primary_gpu(&host_env);
     let loaded_rules = load_rules(&host_env);
     for warn in &loaded_rules.warnings {
         eprintln!("hyperx-proton: warning: {warn}");
     }
     let rule_eval = evaluate_rules(&loaded_rules.rules, exe, &host_env);
-    let dxvk_sel = choose_dxvk_backend(
-        &gpu_probe,
-        host_env.get("HYPERX_PROTON_DXVK_BACKEND").map(String::as_str),
-        rule_eval.dxvk_backend,
-        is_sarek_bundled(runner_root),
-    );
-    if let Some(warn) = &dxvk_sel.warning {
-        eprintln!("hyperx-proton: warning: {warn}");
-    }
 
     let rt = build_runtime_env_with_sync(
         runner_root,
@@ -207,19 +179,12 @@ fn run_launch(runner_root: &Path, wait_for_exit: bool, args: &[String]) -> Resul
         &host_env,
         is_ntsync_available(),
         is_fsync_available(),
-        &gpu_probe,
         &rule_eval,
     );
 
     let _ = raise_nofile_limit(TARGET_NOFILE_SOFT);
 
-    ensure_prefix_ready(
-        runner_root,
-        &layout,
-        &manifest.version,
-        &rt,
-        dxvk_sel.backend,
-    )?;
+    ensure_prefix_ready(runner_root, &layout, &manifest.version, &rt)?;
 
     if let Some(exe_dir) = Path::new(exe).parent() {
         let _ = apply_ensure_files(exe_dir, &rule_eval.ensure_files);

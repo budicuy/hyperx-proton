@@ -73,13 +73,3 @@ pub fn merge_dll_overrides_with_extras(
 
     entries.join(";")
 }
-
-/// Merges `WINEDLLOVERRIDES` non-destructively.
-///
-/// User- or preset-supplied DLL entries are preserved verbatim in their original
-/// order and always win over HyperX-Proton defaults (`d3d11=n`, `dxgi=n`,
-/// `d3d12=n`, `d3d12core=n`, `lsteamclient=d`, and `nvapi64=n` when `enable_nvapi`
-/// is true).
-pub fn merge_dll_overrides(existing: Option<&str>, enable_nvapi: bool) -> String {
-    merge_dll_overrides_with_extras(existing, &[], enable_nvapi)
-}

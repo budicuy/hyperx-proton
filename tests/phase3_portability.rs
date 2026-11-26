@@ -1,5 +1,4 @@
 use hyperx_proton::config::resolve_prefix_layout;
-use hyperx_proton::gpu::GpuProbeResult;
 use hyperx_proton::rules::RuleEvaluation;
 use hyperx_proton::runtime::{
     SyncMode, build_runtime_env_with_sync, resolve_sync_mode,
@@ -48,7 +47,6 @@ fn resolve_sync_mode_falls_back_across_ntsync_fsync_esync_and_plain() {
 fn build_runtime_env_with_sync_sets_esync_and_sanitizes_steam_scout_ld_library_path() {
     let runner = Path::new("/opt/hyperx-proton");
     let layout = resolve_prefix_layout(Some(Path::new("/tmp/SHARED")), None).unwrap();
-    let probe = GpuProbeResult::Unavailable("test".to_string());
 
     // 1. No ntsync & no fsync -> WINEESYNC=1; empty SYSTEM_LD_LIBRARY_PATH removes LD_LIBRARY_PATH completely
     let mut host_env = BTreeMap::new();
@@ -68,7 +66,6 @@ fn build_runtime_env_with_sync_sets_esync_and_sanitizes_steam_scout_ld_library_p
         &host_env,
         false,
         false,
-        &probe,
         &RuleEvaluation::default(),
     );
     assert_eq!(rt.env.get("PROTON_USE_NTSYNC").map(String::as_str), Some("0"));
@@ -92,7 +89,6 @@ fn build_runtime_env_with_sync_sets_esync_and_sanitizes_steam_scout_ld_library_p
         &plain_env,
         false,
         false,
-        &probe,
         &RuleEvaluation::default(),
     );
     assert_eq!(
@@ -111,7 +107,6 @@ fn build_runtime_env_with_sync_sets_esync_and_sanitizes_steam_scout_ld_library_p
         &no_fsync_env,
         false,
         true,
-        &probe,
         &RuleEvaluation::default(),
     );
     assert_eq!(
@@ -138,7 +133,6 @@ fn build_runtime_env_with_sync_sets_esync_and_sanitizes_steam_scout_ld_library_p
         &host_env,
         false,
         false,
-        &probe,
         &RuleEvaluation::default(),
     );
     assert_eq!(
@@ -253,7 +247,6 @@ fn cli_runinprefix_bootstraps_prefix_and_skips_game_rules_and_steam_shim() {
         .env("HYPERX_PROTON_ROOT", &runner)
         .env("STEAM_COMPAT_DATA_PATH", &compat)
         .env("HYPERX_PROTON_RULES_DIR", &rules_dir)
-        .env("HYPERX_PROTON_NO_GPU_PROBE", "1")
         .env("TEST_CALL_LOG", &log_file)
         .status()
         .unwrap();
@@ -283,7 +276,6 @@ fn cli_runinprefix_bootstraps_prefix_and_skips_game_rules_and_steam_shim() {
         .env("HYPERX_PROTON_ROOT", &runner)
         .env("STEAM_COMPAT_DATA_PATH", &compat)
         .env("HYPERX_PROTON_RULES_DIR", &rules_dir)
-        .env("HYPERX_PROTON_NO_GPU_PROBE", "1")
         .env("TEST_CALL_LOG", &log_file)
         .status()
         .unwrap();

@@ -5,7 +5,8 @@ use std::path::Path;
 use std::process::Command;
 
 use hyperx_proton::config::resolve_prefix_layout;
-use hyperx_proton::runtime::build_runtime_env;
+use hyperx_proton::rules::RuleEvaluation;
+use hyperx_proton::runtime::build_runtime_env_with_sync;
 
 fn create_stub_runner(root: &Path, with_dlls: bool) {
     fs::create_dir_all(root.join("files/bin")).unwrap();
@@ -86,7 +87,7 @@ fn build_runtime_env_enables_ntsync_when_device_present_and_respects_opt_out() {
         "/tmp/shaders".to_string(),
     );
 
-    let rt = build_runtime_env(runner, &layout, &host_env, true);
+    let rt = build_runtime_env_with_sync(runner, &layout, &host_env, true, true, &RuleEvaluation::default());
     assert_eq!(rt.env.get("WINEARCH").map(String::as_str), Some("wow64"));
     assert_eq!(rt.env.get("PROTON_USE_NTSYNC").map(String::as_str), Some("1"));
     assert_eq!(rt.env.get("WINEFSYNC").map(String::as_str), Some("0"));
@@ -123,7 +124,7 @@ fn build_runtime_env_enables_ntsync_when_device_present_and_respects_opt_out() {
     // Opt-out via PROTON_NO_NTSYNC=1
     let mut opt_out_env = host_env.clone();
     opt_out_env.insert("PROTON_NO_NTSYNC".to_string(), "1".to_string());
-    let rt_opt_out = build_runtime_env(runner, &layout, &opt_out_env, true);
+    let rt_opt_out = build_runtime_env_with_sync(runner, &layout, &opt_out_env, true, true, &RuleEvaluation::default());
     assert_eq!(
         rt_opt_out.env.get("PROTON_USE_NTSYNC").map(String::as_str),
         Some("0")
@@ -134,7 +135,7 @@ fn build_runtime_env_enables_ntsync_when_device_present_and_respects_opt_out() {
     );
 
     // Unavailable /dev/ntsync
-    let rt_no_dev = build_runtime_env(runner, &layout, &host_env, false);
+    let rt_no_dev = build_runtime_env_with_sync(runner, &layout, &host_env, false, true, &RuleEvaluation::default());
     assert_eq!(
         rt_no_dev.env.get("PROTON_USE_NTSYNC").map(String::as_str),
         Some("0")

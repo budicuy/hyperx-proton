@@ -5,8 +5,7 @@ Pure native, universal `x86-64` Proton runner built in Rust for Linux (`glibc >=
 ## Overview
 
 - **Universal `x86-64` & Clean Host Linkage:** Built with `-march=x86-64 -mtune=generic` (no AVX2 or generation-specific CPU instructions required) and Wine configured `--without-ffmpeg --without-unwind` so media uses host GStreamer (`libgstreamer-1.0.so.0`) and unwinding uses standard `libgcc_s.so.1`.
-- **Multi-Vendor GPU Auto-Detection:** Native `libvulkan.so.1` probing for AMD, Intel, and NVIDIA with automatic `PROTON_ENABLE_NVAPI` vendor guarding (`dxvk-nvapi` `v0.9.3`) and automatic fallback from DXVK `v3.1.1` (Vulkan 1.3+) to DXVK-Sarek `v1.14.1` (Vulkan 1.1/1.2) — without overriding host GPU driver or shader cache defaults.
-- **DirectX 12 & Graphics:** `d3d12.dll` / `d3d12core.dll` via VKD3D-Proton `v3.1`, DX11/DXGI via DXVK `v3.1.1` / DXVK-Sarek `v1.14.1`, and opt-in NVAPI (`PROTON_ENABLE_NVAPI=1`).
+- **DirectX 12 & Graphics:** `d3d12.dll` / `d3d12core.dll` via VKD3D-Proton `v3.1`, DX11/DXGI via DXVK `v3.1.1`, and opt-in NVAPI (`dxvk-nvapi` `v0.9.3` via `PROTON_ENABLE_NVAPI=1`) — without overriding host GPU driver or shader cache defaults.
 - **3-Tier Kernel Sync:** Automatic runtime detection in priority order: `ntsync` (`/dev/ntsync`) → `fsync` (`futex_waitv`) → `esync` (`WINEESYNC=1`), with plain `wineserver` sync as final fallback.
 - **Native Game Rule Engine:** Built-in rules (Wuthering Waves, Honkai: Star Rail, Genshin Impact, Zenless Zone Zero) with conditional `steam.exe` shim and drop-in user JSON rules (`$XDG_CONFIG_HOME/hyperx-proton/rules/*.json`).
 - **Steam Scout & Prefix Compatibility:** Automatically sanitizes injected `steam-runtime` / `ubuntu12_*` `LD_LIBRARY_PATH` entries (preserving `LD_PRELOAD` for overlays/MangoHud), supports `proton runinprefix` for redistributables and prefix helpers (`protontricks`, Winecfg/Winetricks), and guards prefix DLL sync with `flock` (using Btrfs `FICLONE` reflink when available).
@@ -19,7 +18,7 @@ Pure native, universal `x86-64` Proton runner built in Rust for Linux (`glibc >=
 | **CPU** | Any 64-bit `x86-64` processor (Intel/AMD, no AVX2 required) | 4+ physical cores (for parallel shader compilation) |
 | **OS & `glibc`** | 64-bit Linux with **`glibc >= 2.38`** (see supported distros below) | Modern rolling or recent LTS distro (`glibc >= 2.38`) |
 | **Kernel & Sync** | Linux 5.x (`WINEESYNC`) | Linux `5.16+` (`WINEFSYNC` / `futex_waitv`) or **`6.14+` (`/dev/ntsync`)** |
-| **GPU & Vulkan** | Vulkan 1.1 / 1.2 (auto-fallback to **DXVK-Sarek `v1.14.1`**): AMD GCN/Polaris, Intel HD/UHD Gen 7–10, NVIDIA Kepler/Maxwell/Pascal | Vulkan 1.3+ (**DXVK `v3.1.1` & VKD3D-Proton `v3.1`**): NVIDIA GTX 16xx/RTX 20xx+ (driver 550+), AMD RX 5000+ (Mesa RADV 23+), Intel Arc / Gen 11+ (Mesa ANV 23+) |
+| **GPU & Vulkan** | Vulkan 1.3+ (**DXVK `v3.1.1` & VKD3D-Proton `v3.1`**): NVIDIA GTX 16xx/RTX 20xx+ (driver 550+), AMD RX 5000+ (Mesa RADV 23+), Intel Arc / Gen 11+ (Mesa ANV 23+) | Vulkan 1.3+ with modern Mesa RADV/ANV or NVIDIA 550+ drivers |
 | **RAM** | 8 GB | 16 GB+ |
 | **Storage** | 2 GB free for runner + game prefixes | SSD / NVMe (Btrfs enables zero-copy `FICLONE` prefix sync) |
 
@@ -91,10 +90,8 @@ After building and packaging (`./scripts/build.sh && ./scripts/package-runner.sh
 | `PROTON_NO_NTSYNC=1` | Disable `/dev/ntsync` and fall back to `fsync` (or `esync`) |
 | `PROTON_NO_FSYNC=1` | Disable `WINEFSYNC` (`futex_waitv`) and fall back to `esync` |
 | `PROTON_NO_ESYNC=1` | Disable `WINEESYNC` (falls back to plain `wineserver` sync if `ntsync`/`fsync` are also disabled) |
-| `PROTON_ENABLE_NVAPI=1` | Enable `dxvk-nvapi` (`nvapi64.dll`) on NVIDIA GPUs (`HYPERX_PROTON_FORCE_NVAPI=1` overrides vendor guard) |
+| `PROTON_ENABLE_NVAPI=1` | Enable `dxvk-nvapi` (`nvapi64.dll`) |
 | `PROTON_ENABLE_WAYLAND=1` | Enable native Wine Wayland driver (`DISPLAY` unset) |
-| `HYPERX_PROTON_DXVK_BACKEND` | Override DXVK backend: `auto` (default), `standard` (`v3.1.1`), or `sarek` (`v1.14.1`) |
-| `HYPERX_PROTON_NO_GPU_PROBE=1` | Skip native `libvulkan.so.1` GPU probing |
 | `HYPERX_PROTON_NO_RULES=1` | Disable built-in and custom game rules |
 | `HYPERX_PROTON_RULES_DIR` | Override custom rules directory (default: `$XDG_CONFIG_HOME/hyperx-proton/rules`) |
 | `HYPERX_PROTON_NO_STEAM_SHIM=1` / `HYPERX_PROTON_FORCE_STEAM_SHIM=1` | Force-disable or force-enable the conditional `steam.exe` shim |
@@ -119,7 +116,6 @@ Drop a single rule object or a JSON array of rule objects into `~/.config/hyperx
   },
   "dll_overrides": ["example_ext=n,b"],
   "use_steam_shim": false,
-  "dxvk_backend": "auto",
   "ensure_files": [
     {
       "if_exists_rel": "Engine/Binaries/Win64/Helper.exe",

@@ -12,7 +12,7 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         -h|--help)
-            echo "Usage: $0 [--component all|rust|wine|dxvk|dxvk-sarek|vkd3d|nvapi|icu|shim]"
+            echo "Usage: $0 [--component all|rust|wine|dxvk|vkd3d|nvapi|icu|shim]"
             exit 0
             ;;
         *)
@@ -47,7 +47,6 @@ case "$COMPONENT" in
         build_rust
         bash "$SCRIPTS_DIR/build-wine.sh"
         bash "$SCRIPTS_DIR/build-dxvk.sh"
-        bash "$SCRIPTS_DIR/build-dxvk-sarek.sh"
         bash "$SCRIPTS_DIR/build-vkd3d.sh"
         bash "$SCRIPTS_DIR/build-nvapi.sh"
         bash "$SCRIPTS_DIR/build-icu.sh"
@@ -63,10 +62,6 @@ case "$COMPONENT" in
     dxvk)
         check_tools x86_64-w64-mingw32-gcc meson ninja glslangValidator
         bash "$SCRIPTS_DIR/build-dxvk.sh"
-        ;;
-    dxvk-sarek)
-        check_tools x86_64-w64-mingw32-gcc meson ninja glslangValidator
-        bash "$SCRIPTS_DIR/build-dxvk-sarek.sh"
         ;;
     vkd3d)
         check_tools x86_64-w64-mingw32-gcc meson ninja glslangValidator

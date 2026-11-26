@@ -53,7 +53,7 @@ fi
 mkdir -p "$OUT_DIR"
 
 if [[ -z "$RELEASE_NOTES" ]]; then
-    RELEASE_NOTES="Universal x86-64 build with DXVK ${DXVK_REF}, DXVK-Sarek ${DXVK_SAREK_REF}, VKD3D-Proton ${VKD3D_PROTON_REF}."
+    RELEASE_NOTES="Universal x86-64 build with DXVK ${DXVK_REF}, VKD3D-Proton ${VKD3D_PROTON_REF}."
 fi
 
 ASSET_NAME="$(basename "$TARBALL")"

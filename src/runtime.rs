@@ -1,6 +1,5 @@
 use crate::config::PrefixLayout;
 use crate::dll_overrides::merge_dll_overrides_with_extras;
-use crate::gpu::{GpuProbeResult, GpuVendor};
 use crate::rules::RuleEvaluation;
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -119,7 +118,7 @@ fn is_env_enabled(host_env: &BTreeMap<String, String>, key: &str) -> bool {
 
 /// Builds the Wine execution environment with explicit `ntsync` and `fsync` availability,
 /// preserving host/game overrides while configuring 3-tier sync, Steam `LD_LIBRARY_PATH`
-/// sanitization, Wayland, `PATH`, `WINEDLLOVERRIDES`, NVAPI vendor guarding, and
+/// sanitization, Wayland, `PATH`, `WINEDLLOVERRIDES`, NVAPI opt-in, and
 /// game rule overrides (`User > Rule > Defaults`).
 pub fn build_runtime_env_with_sync(
     runner_root: &Path,
@@ -127,7 +126,6 @@ pub fn build_runtime_env_with_sync(
     host_env: &BTreeMap<String, String>,
     ntsync_available: bool,
     fsync_available: bool,
-    gpu_probe: &GpuProbeResult,
     rule_eval: &RuleEvaluation,
 ) -> RuntimeEnv {
     let mut env = host_env.clone();
@@ -182,15 +180,8 @@ pub fn build_runtime_env_with_sync(
     // looking for a separate 32-bit i386-unix/wine binary.
     env.insert("WINEARCH".to_string(), "wow64".to_string());
 
-    let force_nvapi = is_env_enabled(&env, "HYPERX_PROTON_FORCE_NVAPI");
-    let want_nvapi = force_nvapi
-        || is_env_enabled(&env, "PROTON_ENABLE_NVAPI")
+    let nvapi_enabled = is_env_enabled(&env, "PROTON_ENABLE_NVAPI")
         || is_env_enabled(&env, "HYPERX_PROTON_NVAPI");
-    let nvapi_allowed = match gpu_probe.vendor() {
-        Some(GpuVendor::Amd | GpuVendor::Intel) => force_nvapi,
-        _ => true,
-    };
-    let nvapi_enabled = want_nvapi && nvapi_allowed;
 
     let merged_overrides = merge_dll_overrides_with_extras(
         env.get("WINEDLLOVERRIDES").map(String::as_str),
@@ -246,41 +237,4 @@ pub fn build_runtime_env_with_sync(
         wineserver_bin: runner_bin.join("wineserver"),
         nvapi_enabled,
     }
-}
-
-/// Backward-compatible wrapper assuming `futex_waitv` (`fsync`) is available.
-pub fn build_runtime_env_with_context(
-    runner_root: &Path,
-    layout: &PrefixLayout,
-    host_env: &BTreeMap<String, String>,
-    ntsync_available: bool,
-    gpu_probe: &GpuProbeResult,
-    rule_eval: &RuleEvaluation,
-) -> RuntimeEnv {
-    build_runtime_env_with_sync(
-        runner_root,
-        layout,
-        host_env,
-        ntsync_available,
-        true,
-        gpu_probe,
-        rule_eval,
-    )
-}
-
-/// Backward-compatible wrapper using default GPU probe (`Unavailable`) and no rules.
-pub fn build_runtime_env(
-    runner_root: &Path,
-    layout: &PrefixLayout,
-    host_env: &BTreeMap<String, String>,
-    ntsync_available: bool,
-) -> RuntimeEnv {
-    build_runtime_env_with_context(
-        runner_root,
-        layout,
-        host_env,
-        ntsync_available,
-        &GpuProbeResult::Unavailable("not probed".to_string()),
-        &RuleEvaluation::default(),
-    )
 }

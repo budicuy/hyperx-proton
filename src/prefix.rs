@@ -1,5 +1,4 @@
 use crate::config::PrefixLayout;
-use crate::gpu::DxvkBackend;
 use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::os::unix::fs::PermissionsExt;
@@ -9,16 +8,9 @@ use std::path::{Path, PathBuf};
 /// Linux `FICLONE` ioctl request code (`_IOW(0x94, 9, int)`).
 const FICLONE: libc::c_ulong = 0x4004_9409;
 
-/// Outcome of [`reflink_or_copy`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CopyMethod {
-    Reflink,
-    RegularCopy,
-}
-
 /// Copies `src` to `dst`, preferring zero-copy CoW reflink (`FICLONE`, e.g. Btrfs/XFS)
 /// and transparently falling back to a regular buffered copy on unsupported filesystems.
-pub fn reflink_or_copy(src: &Path, dst: &Path) -> Result<CopyMethod, String> {
+pub fn reflink_or_copy(src: &Path, dst: &Path) -> Result<(), String> {
     let src_meta =
         fs::metadata(src).map_err(|err| format!("failed to stat {}: {err}", src.display()))?;
     let mut src_file =
@@ -32,9 +24,7 @@ pub fn reflink_or_copy(src: &Path, dst: &Path) -> Result<CopyMethod, String> {
         .map_err(|err| format!("failed to create {}: {err}", dst.display()))?;
 
     let rc = unsafe { libc::ioctl(dst_file.as_raw_fd(), FICLONE, src_file.as_raw_fd()) };
-    let method = if rc == 0 {
-        CopyMethod::Reflink
-    } else {
+    if rc != 0 {
         io::copy(&mut src_file, &mut dst_file).map_err(|err| {
             format!(
                 "failed to copy {} to {}: {err}",
@@ -42,13 +32,12 @@ pub fn reflink_or_copy(src: &Path, dst: &Path) -> Result<CopyMethod, String> {
                 dst.display()
             )
         })?;
-        CopyMethod::RegularCopy
-    };
+    }
 
     let perms = fs::Permissions::from_mode(src_meta.permissions().mode() & 0o777);
     let _ = dst_file.set_permissions(perms);
 
-    Ok(method)
+    Ok(())
 }
 
 /// Exclusive `flock` guard for a Wine prefix or compat-data directory.
@@ -112,9 +101,8 @@ pub struct PrefixSyncReport {
 fn target_prefix_files(
     runner_root: &Path,
     enable_nvapi: bool,
-    dxvk_backend: DxvkBackend,
 ) -> Vec<(PathBuf, &'static str, &'static str)> {
-    let dxvk_dir = runner_root.join(dxvk_backend.rel_dll_dir());
+    let dxvk_dir = runner_root.join("files/lib/dxvk/x86_64-windows");
     let mut list = vec![
         (
             dxvk_dir.join("d3d11.dll"),
@@ -278,14 +266,13 @@ pub fn prefix_needs_wineboot(
 }
 
 /// Non-destructively syncs DX11/DX12 (and opt-in NVAPI) DLLs into `system32`
-/// for the selected [`DxvkBackend`] and updates stamps without touching
-/// `user.reg`, `system.reg`, or `drive_c/users/`.
-pub fn sync_prefix_dlls_with_options(
+/// and updates stamps without touching `user.reg`, `system.reg`, or
+/// `drive_c/users/`.
+pub fn sync_prefix_dlls(
     runner_root: &Path,
     layout: &PrefixLayout,
     runner_version: &str,
     enable_nvapi: bool,
-    dxvk_backend: DxvkBackend,
 ) -> Result<PrefixSyncReport, String> {
     let sys32 = layout.wineprefix.join("drive_c/windows/system32");
     fs::create_dir_all(&sys32).map_err(|err| {
@@ -305,20 +292,14 @@ pub fn sync_prefix_dlls_with_options(
         .map(|s| s.trim().to_string());
     let version_changed = current_stamp.as_deref() != Some(runner_version);
 
-    let backend_stamp_path = layout.wineprefix.join(".hyperx-proton-dxvk-backend");
-    let current_backend = fs::read_to_string(&backend_stamp_path)
-        .ok()
-        .map(|s| s.trim().to_string());
-    let backend_changed = current_backend.as_deref() != Some(dxvk_backend.as_str());
-
     let system_reg_missing = !layout.wineprefix.join("system.reg").is_file();
 
-    let dlls = target_prefix_files(runner_root, enable_nvapi, dxvk_backend);
+    let dlls = target_prefix_files(runner_root, enable_nvapi);
     let all_dlls_present = dlls
         .iter()
         .all(|(_, dest_dir, name)| is_regular_file(&layout.wineprefix.join(dest_dir).join(name)));
 
-    let dlls_updated = if version_changed || backend_changed || !all_dlls_present {
+    let dlls_updated = if version_changed || !all_dlls_present {
         for (src, dest_dir, name) in &dlls {
             if !src.is_file() {
                 return Err(format!("missing bundled runtime file: {}", src.display()));
@@ -342,13 +323,6 @@ pub fn sync_prefix_dlls_with_options(
             )
         })?;
 
-        fs::write(&backend_stamp_path, format!("{}\n", dxvk_backend.as_str())).map_err(|err| {
-            format!(
-                "failed to write {}: {err}",
-                backend_stamp_path.display()
-            )
-        })?;
-
         if let Some(compat) = &layout.compat_data_dir {
             let compat_version = compat.join("version");
             fs::write(&compat_version, format!("{runner_version}\n")).map_err(|err| {
@@ -368,20 +342,4 @@ pub fn sync_prefix_dlls_with_options(
         dlls_updated,
         needs_wineboot: version_changed || system_reg_missing,
     })
-}
-
-/// Backward-compatible wrapper using [`DxvkBackend::Standard`].
-pub fn sync_prefix_dlls(
-    runner_root: &Path,
-    layout: &PrefixLayout,
-    runner_version: &str,
-    enable_nvapi: bool,
-) -> Result<PrefixSyncReport, String> {
-    sync_prefix_dlls_with_options(
-        runner_root,
-        layout,
-        runner_version,
-        enable_nvapi,
-        DxvkBackend::Standard,
-    )
 }

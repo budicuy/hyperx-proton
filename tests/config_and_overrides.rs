@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 use hyperx_proton::config::{load_manifest, resolve_prefix_layout};
-use hyperx_proton::dll_overrides::merge_dll_overrides;
+use hyperx_proton::dll_overrides::merge_dll_overrides_with_extras;
 
 #[test]
 fn resolve_prefix_prefers_compat_data_pfx_over_flat_wineprefix() {
@@ -61,7 +61,7 @@ fn load_manifest_validates_native_mode_and_rejects_non_native() {
 
 #[test]
 fn merge_dll_overrides_preserves_user_overrides_and_adds_dx11_dx12() {
-    let merged = merge_dll_overrides(Some("jsproxy=n,b;KRSDKExternal.exe=d;d3d11=b"), false);
+    let merged = merge_dll_overrides_with_extras(Some("jsproxy=n,b;KRSDKExternal.exe=d;d3d11=b"), &[], false);
     assert!(merged.contains("jsproxy=n,b"));
     assert!(merged.contains("KRSDKExternal.exe=d"));
     assert!(merged.contains("d3d11=b"));
@@ -75,6 +75,6 @@ fn merge_dll_overrides_preserves_user_overrides_and_adds_dx11_dx12() {
     assert!(merged.contains("winemenubuilder.exe=d"));
     assert!(!merged.contains("nvapi64=n"));
 
-    let with_nvapi = merge_dll_overrides(None, true);
+    let with_nvapi = merge_dll_overrides_with_extras(None, &[], true);
     assert!(with_nvapi.contains("nvapi64=n"));
 }
