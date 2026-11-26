@@ -1,10 +1,55 @@
 use crate::config::PrefixLayout;
 use crate::gpu::DxvkBackend;
-use crate::sys_tune::reflink_or_copy;
 use std::fs::{self, File, OpenOptions};
 use std::io;
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
+
+/// Linux `FICLONE` ioctl request code (`_IOW(0x94, 9, int)`).
+const FICLONE: libc::c_ulong = 0x4004_9409;
+
+/// Outcome of [`reflink_or_copy`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CopyMethod {
+    Reflink,
+    RegularCopy,
+}
+
+/// Copies `src` to `dst`, preferring zero-copy CoW reflink (`FICLONE`, e.g. Btrfs/XFS)
+/// and transparently falling back to a regular buffered copy on unsupported filesystems.
+pub fn reflink_or_copy(src: &Path, dst: &Path) -> Result<CopyMethod, String> {
+    let src_meta =
+        fs::metadata(src).map_err(|err| format!("failed to stat {}: {err}", src.display()))?;
+    let mut src_file =
+        File::open(src).map_err(|err| format!("failed to open {}: {err}", src.display()))?;
+
+    let mut dst_file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(dst)
+        .map_err(|err| format!("failed to create {}: {err}", dst.display()))?;
+
+    let rc = unsafe { libc::ioctl(dst_file.as_raw_fd(), FICLONE, src_file.as_raw_fd()) };
+    let method = if rc == 0 {
+        CopyMethod::Reflink
+    } else {
+        io::copy(&mut src_file, &mut dst_file).map_err(|err| {
+            format!(
+                "failed to copy {} to {}: {err}",
+                src.display(),
+                dst.display()
+            )
+        })?;
+        CopyMethod::RegularCopy
+    };
+
+    let perms = fs::Permissions::from_mode(src_meta.permissions().mode() & 0o777);
+    let _ = dst_file.set_permissions(perms);
+
+    Ok(method)
+}
 
 /// Exclusive `flock` guard for a Wine prefix or compat-data directory.
 pub struct PrefixLock {

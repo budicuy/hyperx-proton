@@ -2,7 +2,6 @@ use crate::config::PrefixLayout;
 use crate::dll_overrides::merge_dll_overrides_with_extras;
 use crate::gpu::{GpuProbeResult, GpuVendor};
 use crate::rules::RuleEvaluation;
-use crate::topology::{compute_shader_compiler_threads, detect_physical_cores};
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -120,7 +119,7 @@ fn is_env_enabled(host_env: &BTreeMap<String, String>, key: &str) -> bool {
 
 /// Builds the Wine execution environment with explicit `ntsync` and `fsync` availability,
 /// preserving host/game overrides while configuring 3-tier sync, Steam `LD_LIBRARY_PATH`
-/// sanitization, Wayland, `PATH`, `WINEDLLOVERRIDES`, vendor-aware shader caches, and
+/// sanitization, Wayland, `PATH`, `WINEDLLOVERRIDES`, NVAPI vendor guarding, and
 /// game rule overrides (`User > Rule > Defaults`).
 pub fn build_runtime_env_with_sync(
     runner_root: &Path,
@@ -234,68 +233,6 @@ pub fn build_runtime_env_with_sync(
     // (matches Proton-CachyOS fixes for WuWa, Genshin, and ZZZ) unless overridden.
     env.entry("WINE_DISABLE_VULKAN_OPWR".to_string())
         .or_insert_with(|| "1".to_string());
-
-    // Size DXVK/vkd3d shader compiler threads from host physical core topology so
-    // background shader compilation does not starve the game's RenderThread.
-    let shader_threads = env
-        .get("HYPERX_PROTON_SHADER_THREADS")
-        .and_then(|s| s.trim().parse::<usize>().ok())
-        .filter(|&n| n > 0)
-        .unwrap_or_else(|| compute_shader_compiler_threads(detect_physical_cores()));
-    let shader_threads_str = shader_threads.to_string();
-
-    // DXVK v3.x reads `dxvk.numCompilerThreads` from `DXVK_CONFIG` (not a standalone env var).
-    let existing_dxvk_config = env
-        .get("DXVK_CONFIG")
-        .map(String::as_str)
-        .unwrap_or("")
-        .trim();
-    if !existing_dxvk_config
-        .to_ascii_lowercase()
-        .contains("dxvk.numcompilerthreads")
-    {
-        let merged_dxvk_config = if existing_dxvk_config.is_empty() {
-            format!("dxvk.numCompilerThreads = {shader_threads}")
-        } else {
-            format!(
-                "{}; dxvk.numCompilerThreads = {shader_threads}",
-                existing_dxvk_config.trim_end_matches(';')
-            )
-        };
-        env.insert("DXVK_CONFIG".to_string(), merged_dxvk_config);
-    }
-
-    env.entry("VKD3D_WORKER_THREADS".to_string())
-        .or_insert_with(|| shader_threads_str);
-    env.entry("DXVK_STATE_CACHE".to_string())
-        .or_insert_with(|| "1".to_string());
-
-    match gpu_probe.vendor() {
-        Some(GpuVendor::Amd | GpuVendor::Intel) => {
-            env.entry("MESA_SHADER_CACHE_DISABLE".to_string())
-                .or_insert_with(|| "false".to_string());
-            env.entry("MESA_SHADER_CACHE_MAX_SIZE".to_string())
-                .or_insert_with(|| "2G".to_string());
-        }
-        Some(GpuVendor::Nvidia) | Some(GpuVendor::Other(_)) | None => {
-            // Ensure NVIDIA shader disk cache is enabled with a safe 2 GiB (INT32_MAX) ceiling
-            // so vkd3d-proton's shaderModuleIdentifier cache does not thrash at NVIDIA's 1 GiB default
-            // while avoiding the 32-bit overflow bug on >4 GiB values.
-            env.entry("__GL_SHADER_DISK_CACHE".to_string())
-                .or_insert_with(|| "1".to_string());
-            env.entry("__GL_SHADER_DISK_CACHE_SKIP_CLEANUP".to_string())
-                .or_insert_with(|| "1".to_string());
-            env.entry("__GL_SHADER_DISK_CACHE_SIZE".to_string())
-                .or_insert_with(|| "2147483647".to_string());
-        }
-    }
-
-    // Silence high-frequency DXVK/vkd3d info log spam (e.g. disk-cache flush lines)
-    // during gameplay unless the user explicitly enables debug logging.
-    env.entry("DXVK_LOG_LEVEL".to_string())
-        .or_insert_with(|| "error".to_string());
-    env.entry("VKD3D_DEBUG".to_string())
-        .or_insert_with(|| "none".to_string());
 
     if is_env_enabled(&env, "PROTON_ENABLE_WAYLAND")
         && env.get("WAYLAND_DISPLAY").is_some_and(|v| !v.is_empty())

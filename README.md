@@ -5,7 +5,7 @@ Pure native, universal `x86-64` Proton runner built in Rust for Linux (`glibc >=
 ## Overview
 
 - **Universal `x86-64` & Clean Host Linkage:** Built with `-march=x86-64 -mtune=generic` (no AVX2 or generation-specific CPU instructions required) and Wine configured `--without-ffmpeg --without-unwind` so media uses host GStreamer (`libgstreamer-1.0.so.0`) and unwinding uses standard `libgcc_s.so.1`.
-- **Multi-Vendor GPU Auto-Detection:** Native `libvulkan.so.1` probing for AMD, Intel, and NVIDIA with vendor-aware shader cache tuning (Mesa `RADV`/`ANV` and NVIDIA `GLCache`), automatic `PROTON_ENABLE_NVAPI` vendor guarding (`dxvk-nvapi` `v0.9.3`), and automatic fallback from DXVK `v3.1.1` (Vulkan 1.3+) to DXVK-Sarek `v1.14.1` (Vulkan 1.1/1.2).
+- **Multi-Vendor GPU Auto-Detection:** Native `libvulkan.so.1` probing for AMD, Intel, and NVIDIA with automatic `PROTON_ENABLE_NVAPI` vendor guarding (`dxvk-nvapi` `v0.9.3`) and automatic fallback from DXVK `v3.1.1` (Vulkan 1.3+) to DXVK-Sarek `v1.14.1` (Vulkan 1.1/1.2) — without overriding host GPU driver or shader cache defaults.
 - **DirectX 12 & Graphics:** `d3d12.dll` / `d3d12core.dll` via VKD3D-Proton `v3.1`, DX11/DXGI via DXVK `v3.1.1` / DXVK-Sarek `v1.14.1`, and opt-in NVAPI (`PROTON_ENABLE_NVAPI=1`).
 - **3-Tier Kernel Sync:** Automatic runtime detection in priority order: `ntsync` (`/dev/ntsync`) → `fsync` (`futex_waitv`) → `esync` (`WINEESYNC=1`), with plain `wineserver` sync as final fallback.
 - **Native Game Rule Engine:** Built-in rules (Wuthering Waves, Honkai: Star Rail, Genshin Impact, Zenless Zone Zero) with conditional `steam.exe` shim and drop-in user JSON rules (`$XDG_CONFIG_HOME/hyperx-proton/rules/*.json`).
@@ -99,9 +99,6 @@ After building and packaging (`./scripts/build.sh && ./scripts/package-runner.sh
 | `HYPERX_PROTON_RULES_DIR` | Override custom rules directory (default: `$XDG_CONFIG_HOME/hyperx-proton/rules`) |
 | `HYPERX_PROTON_NO_STEAM_SHIM=1` / `HYPERX_PROTON_FORCE_STEAM_SHIM=1` | Force-disable or force-enable the conditional `steam.exe` shim |
 | `HYPERX_PROTON_KEEP_STEAM_RUNTIME_LD=1` | Opt out of `steam-runtime` `LD_LIBRARY_PATH` sanitization |
-| `HYPERX_PROTON_SHADER_THREADS` | Override parallel shader compiler thread count |
-| `HYPERX_PROTON_NO_TUNE=1` / `HYPERX_PROTON_TIMERSLACK_NS` | Disable runtime process tuning or override `PR_SET_TIMERSLACK` |
-| `HYPERX_PROTON_NO_PREWARM=1` / `HYPERX_PROTON_NO_SUPERVISOR=1` | Disable background shader/prefix pre-warming or `pidfd` thread supervisor |
 
 ### Custom Game Rules (`~/.config/hyperx-proton/rules/my-game.json`)
 

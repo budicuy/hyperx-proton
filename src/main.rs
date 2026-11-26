@@ -11,13 +11,34 @@ use hyperx_proton::rules::{
 use hyperx_proton::runtime::{
     RuntimeEnv, build_runtime_env_with_sync, is_fsync_available, is_ntsync_available,
 };
-use hyperx_proton::shader_warm::{collect_shader_cache_dirs_for_vendor, spawn_shader_cache_prewarm};
-use hyperx_proton::supervisor::wait_with_supervisor;
-use hyperx_proton::sys_tune::{DEFAULT_TIMERSLACK_NS, apply_process_tuning};
 use std::collections::BTreeMap;
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
+
+/// Target soft `RLIMIT_NOFILE` ceiling so `WINEESYNC=1` does not hit `EMFILE`
+/// on distros that default to a 1024 soft file-descriptor limit.
+const TARGET_NOFILE_SOFT: u64 = 524_288;
+
+fn raise_nofile_limit(target_soft: u64) -> Option<u64> {
+    let mut lim = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut lim) } != 0 {
+        return None;
+    }
+
+    let desired = target_soft.min(lim.rlim_max);
+    if lim.rlim_cur < desired {
+        lim.rlim_cur = desired;
+        if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &lim) } == 0 {
+            return Some(desired);
+        }
+    }
+
+    Some(lim.rlim_cur)
+}
 
 fn resolve_runner_root() -> Result<PathBuf, String> {
     if let Ok(override_root) = env::var("HYPERX_PROTON_ROOT")
@@ -132,6 +153,8 @@ fn run_in_prefix(runner_root: &Path, args: &[String]) -> Result<i32, String> {
         &RuleEvaluation::default(),
     );
 
+    let _ = raise_nofile_limit(TARGET_NOFILE_SOFT);
+
     ensure_prefix_ready(
         runner_root,
         &layout,
@@ -188,19 +211,7 @@ fn run_launch(runner_root: &Path, wait_for_exit: bool, args: &[String]) -> Resul
         &rule_eval,
     );
 
-    let no_tune = rt
-        .env
-        .get("HYPERX_PROTON_NO_TUNE")
-        .map(String::as_str)
-        == Some("1");
-    if !no_tune {
-        let timerslack_ns = rt
-            .env
-            .get("HYPERX_PROTON_TIMERSLACK_NS")
-            .and_then(|s| s.trim().parse::<u64>().ok())
-            .unwrap_or(DEFAULT_TIMERSLACK_NS);
-        let _ = apply_process_tuning(timerslack_ns);
-    }
+    let _ = raise_nofile_limit(TARGET_NOFILE_SOFT);
 
     ensure_prefix_ready(
         runner_root,
@@ -215,31 +226,10 @@ fn run_launch(runner_root: &Path, wait_for_exit: bool, args: &[String]) -> Resul
     }
 
     let launch_env = &rt.env;
-    let no_prewarm = launch_env
-        .get("HYPERX_PROTON_NO_PREWARM")
-        .map(String::as_str)
-        == Some("1");
-    let prewarm_handle = if !no_prewarm {
-        let cache_dirs = collect_shader_cache_dirs_for_vendor(
-            &layout,
-            launch_env,
-            Path::new(exe).parent(),
-            gpu_probe.vendor(),
-        );
-        spawn_shader_cache_prewarm(cache_dirs)
-    } else {
-        None
-    };
-
     let has_steam_shim = layout
         .wineprefix
         .join("drive_c/windows/system32/steam.exe")
         .is_file();
-
-    let no_supervisor = launch_env
-        .get("HYPERX_PROTON_NO_SUPERVISOR")
-        .map(String::as_str)
-        == Some("1");
 
     let mut cmd = Command::new(&rt.wine_bin);
     if should_use_steam_shim(&rule_eval, launch_env, has_steam_shim) {
@@ -252,10 +242,9 @@ fn run_launch(runner_root: &Path, wait_for_exit: bool, args: &[String]) -> Resul
         .spawn()
         .map_err(|err| format!("failed to execute {}: {err}", rt.wine_bin.display()))?;
 
-    let status = wait_with_supervisor(&mut child, Some(&layout.wineprefix), !no_supervisor)?;
-    if let Some(handle) = prewarm_handle {
-        let _ = handle.join();
-    }
+    let status = child
+        .wait()
+        .map_err(|err| format!("failed to wait for {}: {err}", rt.wine_bin.display()))?;
 
     if wait_for_exit {
         let _ = Command::new(&rt.wineserver_bin)

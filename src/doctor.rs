@@ -2,8 +2,6 @@ use crate::config::load_manifest;
 use crate::gpu::{GpuProbeResult, choose_dxvk_backend, is_sarek_bundled, probe_primary_gpu};
 use crate::rules::load_rules;
 use crate::runtime::{SyncMode, is_fsync_available, is_ntsync_available, resolve_sync_mode};
-use crate::supervisor::is_pidfd_supported;
-use crate::topology::{compute_shader_compiler_threads, detect_physical_cores};
 use std::collections::BTreeMap;
 use std::ffi::{CStr, CString};
 use std::path::Path;
@@ -159,28 +157,6 @@ pub fn run_doctor(runner_root: &Path) -> Vec<DoctorCheck> {
         }
     };
     checks.push(check_glibc_floor(&glibc_raw));
-
-    let phys_cores = detect_physical_cores();
-    let shader_threads = compute_shader_compiler_threads(phys_cores);
-    checks.push(DoctorCheck {
-        name: "cpu:topology",
-        severity: CheckSeverity::Ok,
-        detail: format!("{phys_cores} physical cores -> {shader_threads} shader compiler threads"),
-    });
-
-    if is_pidfd_supported() {
-        checks.push(DoctorCheck {
-            name: "kernel:pidfd",
-            severity: CheckSeverity::Ok,
-            detail: "pidfd_open event-driven thread supervisor active".to_string(),
-        });
-    } else {
-        checks.push(DoctorCheck {
-            name: "kernel:pidfd",
-            severity: CheckSeverity::Warn,
-            detail: "pidfd_open unavailable; will fall back to standard child wait".to_string(),
-        });
-    }
 
     match load_manifest(runner_root) {
         Ok(m) => checks.push(DoctorCheck {
