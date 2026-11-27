@@ -1,0 +1,155 @@
+diff --git a/dlls/ws2_32/socket.c b/dlls/ws2_32/socket.c
+index df67aff6ba5..e7b19120634 100644
+--- a/dlls/ws2_32/socket.c
++++ b/dlls/ws2_32/socket.c
+@@ -3956,6 +3956,142 @@ int WINAPI WSAAsyncSelect( SOCKET s, HWND window, UINT message, LONG mask )
+ }
+ 
+ 
++static void apply_timeout_fix(void)
++{
++    static LONG timeout_fix_state = 0; /* 0 = uninit, >0 = target_ms, -1 = disabled/done */
++    static LONG timeout_fix_in_progress = 0;
++    static LONG timeout_fix_scan_attempts = 0;
++    static LONG timeout_fix_patched_handles = 0;
++    LONG target_ms = InterlockedCompareExchange(&timeout_fix_state, 0, 0);
++    HANDLE heap;
++    PROCESS_HEAP_ENTRY entry;
++    LONG scan;
++
++    if (target_ms < 0)
++        return;
++
++    if (target_ms == 0)
++    {
++        static const WCHAR * const skip_procs[] = {
++            L"services.exe", L"winedevice.exe", L"explorer.exe", L"rpcss.exe",
++            L"plugplay.exe", L"svchost.exe", L"steam.exe", L"wineboot.exe",
++            L"conhost.exe", L"tabtip.exe", L"start.exe"
++        };
++        const char *env = getenv("WINE_ENABLE_TIMEOUT_FIX");
++        const RTL_USER_PROCESS_PARAMETERS *params;
++        long val;
++        unsigned int i;
++
++        if (!env || !*env)
++        {
++            InterlockedExchange(&timeout_fix_state, -1);
++            return;
++        }
++
++        val = strtol(env, NULL, 10);
++        if (val <= 0)
++        {
++            InterlockedExchange(&timeout_fix_state, -1);
++            return;
++        }
++
++        if (val == 1)
++            target_ms = 60000;
++        else
++        {
++            if (val < 5000) val = 5000;
++            if (val > 120000) val = 120000;
++            target_ms = (LONG)val;
++        }
++
++        params = NtCurrentTeb()->Peb ? NtCurrentTeb()->Peb->ProcessParameters : NULL;
++        if (params && params->ImagePathName.Buffer && params->ImagePathName.Length)
++        {
++            const WCHAR *buf = params->ImagePathName.Buffer;
++            const WCHAR *end = buf + params->ImagePathName.Length / sizeof(WCHAR);
++            const WCHAR *base = buf;
++            const WCHAR *p;
++
++            for (p = buf; p < end; p++)
++            {
++                if (*p == L'\\' || *p == L'/')
++                    base = p + 1;
++            }
++
++            for (i = 0; i < ARRAY_SIZE(skip_procs); i++)
++            {
++                if (!_wcsicmp(base, skip_procs[i]))
++                {
++                    InterlockedExchange(&timeout_fix_state, -1);
++                    return;
++                }
++            }
++        }
++
++        InterlockedCompareExchange(&timeout_fix_state, target_ms, 0);
++        target_ms = InterlockedCompareExchange(&timeout_fix_state, 0, 0);
++        if (target_ms <= 0)
++            return;
++    }
++
++    if (InterlockedCompareExchange(&timeout_fix_in_progress, 1, 0) != 0)
++        return;
++
++    scan = InterlockedIncrement(&timeout_fix_scan_attempts);
++    if (scan > 16)
++    {
++        InterlockedExchange(&timeout_fix_state, -1);
++        InterlockedExchange(&timeout_fix_in_progress, 0);
++        return;
++    }
++
++    heap = GetProcessHeap();
++    if (!heap || !HeapLock(heap))
++    {
++        InterlockedExchange(&timeout_fix_in_progress, 0);
++        return;
++    }
++
++    memset(&entry, 0, sizeof(entry));
++    while (HeapWalk(heap, &entry))
++    {
++        UINT32 magic;
++        UINT32 cur[2];
++
++        if (!(entry.wFlags & PROCESS_HEAP_ENTRY_BUSY))
++            continue;
++        if (entry.cbData < 0x300 || entry.cbData > 0x10000)
++            continue;
++
++        memcpy(&magic, entry.lpData, sizeof(magic));
++        if (magic != 0xC0DEDBADu)
++            continue;
++
++        memcpy(cur, (const BYTE *)entry.lpData + 0x2f8, sizeof(cur));
++        if (cur[0] <= 30000 && cur[1] <= 30000 && (cur[0] > 0 || cur[1] > 0) &&
++            (cur[0] < (UINT32)target_ms || cur[1] < (UINT32)target_ms))
++        {
++            UINT32 next[2] = { (UINT32)target_ms, (UINT32)target_ms };
++            LONG patched;
++
++            memcpy((BYTE *)entry.lpData + 0x2f8, next, sizeof(next));
++            patched = InterlockedIncrement(&timeout_fix_patched_handles);
++            TRACE("Patched timeout (%u, %u) -> %ld ms (patched=%ld)\n",
++                  cur[0], cur[1], target_ms, patched);
++            if (patched >= 2)
++            {
++                InterlockedExchange(&timeout_fix_state, -1);
++                break;
++            }
++        }
++    }
++
++    HeapUnlock(heap);
++    if (scan >= 16)
++        InterlockedExchange(&timeout_fix_state, -1);
++    InterlockedExchange(&timeout_fix_in_progress, 0);
++}
++
+ /***********************************************************************
+  *      WSACreateEvent          (WS2_32.31)
+  *
+@@ -3965,6 +4101,7 @@ WSAEVENT WINAPI WSACreateEvent(void)
+     /* Create a manual-reset event, with initial state: unsignaled */
+     TRACE("\n");
+ 
++    apply_timeout_fix();
+     return CreateEventW(NULL, TRUE, FALSE, NULL);
+ }
+ 

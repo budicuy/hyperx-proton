@@ -238,6 +238,45 @@ fn runtime_env_respects_user_over_rule_over_defaults_for_dxvk_config_and_opwr() 
     );
 }
 
+#[test]
+fn genshin_impact_rule_enables_wine_timeout_fix_with_user_override() {
+    let rules = builtin_rules();
+    let empty_env = BTreeMap::new();
+    let runner = std::path::Path::new("/opt/hyperx-proton");
+    let layout = resolve_prefix_layout(Some(std::path::Path::new("/tmp/SHARED")), None).unwrap();
+
+    for exe in ["/games/Genshin/GenshinImpact.exe", "/games/YuanShen/YuanShen.exe"] {
+        let eval = evaluate_rules(&rules, exe, &empty_env);
+        assert_eq!(eval.matched_rule_ids, vec!["genshin-impact"]);
+        assert_eq!(
+            eval.env.get("WINE_ENABLE_TIMEOUT_FIX").map(String::as_str),
+            Some("1")
+        );
+
+        let rt_default =
+            build_runtime_env_with_sync(runner, &layout, &empty_env, true, true, &eval);
+        assert_eq!(
+            rt_default
+                .env
+                .get("WINE_ENABLE_TIMEOUT_FIX")
+                .map(String::as_str),
+            Some("1")
+        );
+
+        let mut user_env = BTreeMap::new();
+        user_env.insert("WINE_ENABLE_TIMEOUT_FIX".to_string(), "0".to_string());
+        let rt_override =
+            build_runtime_env_with_sync(runner, &layout, &user_env, true, true, &eval);
+        assert_eq!(
+            rt_override
+                .env
+                .get("WINE_ENABLE_TIMEOUT_FIX")
+                .map(String::as_str),
+            Some("0")
+        );
+    }
+}
+
 use hyperx_proton::prefix::{prefix_needs_wineboot, sync_prefix_dlls};
 use std::os::unix::fs::PermissionsExt;
 use std::process::Command;

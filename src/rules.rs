@@ -118,7 +118,7 @@ pub fn builtin_rules() -> Vec<GameRule> {
                 steam_app_ids: Vec::new(),
             },
             steam_game_id: None,
-            env: BTreeMap::new(),
+            env: BTreeMap::from([("WINE_ENABLE_TIMEOUT_FIX".to_string(), "1".to_string())]),
             dll_overrides: Vec::new(),
             use_steam_shim: Some(true),
             ensure_files: Vec::new(),
