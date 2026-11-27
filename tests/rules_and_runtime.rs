@@ -162,7 +162,6 @@ fn runtime_env_stays_neutral_and_supports_nvapi_opt_in() {
         "DXVK_CONFIG",
         "VKD3D_WORKER_THREADS",
         "DXVK_STATE_CACHE",
-        "MESA_SHADER_CACHE_DISABLE",
         "MESA_SHADER_CACHE_MAX_SIZE",
         "__GL_SHADER_DISK_CACHE_SIZE",
         "DXVK_LOG_LEVEL",
@@ -409,11 +408,13 @@ fn runtime_env_pins_shader_caches_and_respects_user_overrides() {
         true,
         &RuleEvaluation::default(),
     );
+    assert_eq!(rt_default.env.get("DXVK_SHADER_CACHE_PATH").map(String::as_str), Some("/tmp/SHARED/shadercache/dxvk"));
     assert_eq!(rt_default.env.get("DXVK_STATE_CACHE_PATH").map(String::as_str), Some("/tmp/SHARED/shadercache/dxvk"));
     assert_eq!(rt_default.env.get("VKD3D_SHADER_CACHE_PATH").map(String::as_str), Some("/tmp/SHARED/shadercache/vkd3d"));
     assert_eq!(rt_default.env.get("__GL_SHADER_DISK_CACHE").map(String::as_str), Some("1"));
-    assert_eq!(rt_default.env.get("__GL_SHADER_DISK_CACHE_SKIP_CLEANUP").map(String::as_str), Some("1"));
+    assert_eq!(rt_default.env.get("__GL_SHADER_DISK_CACHE_SKIP_CLEANUP"), None);
     assert_eq!(rt_default.env.get("__GL_SHADER_DISK_CACHE_PATH").map(String::as_str), Some("/tmp/SHARED/shadercache/nvidia"));
+    assert_eq!(rt_default.env.get("MESA_SHADER_CACHE_DISABLE").map(String::as_str), Some("false"));
     assert_eq!(rt_default.env.get("MESA_SHADER_CACHE_DIR").map(String::as_str), Some("/tmp/SHARED/shadercache/mesa"));
 
     let mut steam_shader_env = BTreeMap::new();

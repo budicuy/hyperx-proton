@@ -239,16 +239,18 @@ pub fn build_runtime_env_with_sync(
                 .map(|dir| dir.join("shadercache"))
         });
     if let Some(root) = shader_root {
+        env.entry("DXVK_SHADER_CACHE_PATH".to_string())
+            .or_insert_with(|| root.join("dxvk").display().to_string());
         env.entry("DXVK_STATE_CACHE_PATH".to_string())
             .or_insert_with(|| root.join("dxvk").display().to_string());
         env.entry("VKD3D_SHADER_CACHE_PATH".to_string())
             .or_insert_with(|| root.join("vkd3d").display().to_string());
         env.entry("__GL_SHADER_DISK_CACHE".to_string())
             .or_insert_with(|| "1".to_string());
-        env.entry("__GL_SHADER_DISK_CACHE_SKIP_CLEANUP".to_string())
-            .or_insert_with(|| "1".to_string());
         env.entry("__GL_SHADER_DISK_CACHE_PATH".to_string())
             .or_insert_with(|| root.join("nvidia").display().to_string());
+        env.entry("MESA_SHADER_CACHE_DISABLE".to_string())
+            .or_insert_with(|| "false".to_string());
         env.entry("MESA_SHADER_CACHE_DIR".to_string())
             .or_insert_with(|| root.join("mesa").display().to_string());
     }
@@ -264,5 +266,128 @@ pub fn build_runtime_env_with_sync(
         wine_bin: runner_bin.join("wine"),
         wineserver_bin: runner_bin.join("wineserver"),
         nvapi_enabled,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_layout(compat_data_dir: Option<PathBuf>) -> PrefixLayout {
+        PrefixLayout {
+            wineprefix: PathBuf::from("/tmp/compat/pfx"),
+            compat_data_dir,
+            lock_file: PathBuf::from("/tmp/compat/prefix.lock"),
+        }
+    }
+
+    #[test]
+    fn shader_cache_defaults_support_dxvk3_and_do_not_force_nvidia_skip_cleanup() {
+        let layout = test_layout(Some(PathBuf::from("/tmp/compat")));
+        let host_env = BTreeMap::new();
+        let rt = build_runtime_env_with_sync(
+            Path::new("/tmp/runner"),
+            &layout,
+            &host_env,
+            true,
+            true,
+            &RuleEvaluation::default(),
+        );
+
+        assert_eq!(
+            rt.env.get("DXVK_SHADER_CACHE_PATH").map(String::as_str),
+            Some("/tmp/compat/shadercache/dxvk")
+        );
+        assert_eq!(
+            rt.env.get("DXVK_STATE_CACHE_PATH").map(String::as_str),
+            Some("/tmp/compat/shadercache/dxvk")
+        );
+        assert_eq!(
+            rt.env.get("VKD3D_SHADER_CACHE_PATH").map(String::as_str),
+            Some("/tmp/compat/shadercache/vkd3d")
+        );
+        assert_eq!(
+            rt.env.get("__GL_SHADER_DISK_CACHE").map(String::as_str),
+            Some("1")
+        );
+        assert_eq!(
+            rt.env.get("__GL_SHADER_DISK_CACHE_PATH").map(String::as_str),
+            Some("/tmp/compat/shadercache/nvidia")
+        );
+        assert_eq!(rt.env.get("__GL_SHADER_DISK_CACHE_SKIP_CLEANUP"), None);
+        assert_eq!(
+            rt.env.get("MESA_SHADER_CACHE_DISABLE").map(String::as_str),
+            Some("false")
+        );
+        assert_eq!(
+            rt.env.get("MESA_SHADER_CACHE_DIR").map(String::as_str),
+            Some("/tmp/compat/shadercache/mesa")
+        );
+    }
+
+    #[test]
+    fn shader_cache_respects_launcher_provided_overrides() {
+        let layout = test_layout(Some(PathBuf::from("/tmp/compat")));
+        let mut host_env = BTreeMap::new();
+        host_env.insert(
+            "STEAM_COMPAT_SHADER_PATH".to_string(),
+            "/tmp/per-game/wuthering-waves".to_string(),
+        );
+        host_env.insert(
+            "DXVK_SHADER_CACHE_PATH".to_string(),
+            "/custom/dxvk".to_string(),
+        );
+        host_env.insert(
+            "__GL_SHADER_DISK_CACHE_SIZE".to_string(),
+            "4294967296".to_string(),
+        );
+        host_env.insert("MESA_SHADER_CACHE_MAX_SIZE".to_string(), "4G".to_string());
+        host_env.insert("MESA_SHADER_CACHE_DISABLE".to_string(), "true".to_string());
+
+        let rt = build_runtime_env_with_sync(
+            Path::new("/tmp/runner"),
+            &layout,
+            &host_env,
+            true,
+            true,
+            &RuleEvaluation::default(),
+        );
+
+        assert_eq!(
+            rt.env.get("STEAM_COMPAT_SHADER_PATH").map(String::as_str),
+            Some("/tmp/per-game/wuthering-waves")
+        );
+        assert_eq!(
+            rt.env.get("DXVK_SHADER_CACHE_PATH").map(String::as_str),
+            Some("/custom/dxvk")
+        );
+        assert_eq!(
+            rt.env.get("DXVK_STATE_CACHE_PATH").map(String::as_str),
+            Some("/tmp/per-game/wuthering-waves/dxvk")
+        );
+        assert_eq!(
+            rt.env.get("VKD3D_SHADER_CACHE_PATH").map(String::as_str),
+            Some("/tmp/per-game/wuthering-waves/vkd3d")
+        );
+        assert_eq!(
+            rt.env.get("__GL_SHADER_DISK_CACHE_PATH").map(String::as_str),
+            Some("/tmp/per-game/wuthering-waves/nvidia")
+        );
+        assert_eq!(
+            rt.env.get("__GL_SHADER_DISK_CACHE_SIZE").map(String::as_str),
+            Some("4294967296")
+        );
+        assert_eq!(
+            rt.env.get("MESA_SHADER_CACHE_DIR").map(String::as_str),
+            Some("/tmp/per-game/wuthering-waves/mesa")
+        );
+        assert_eq!(
+            rt.env.get("MESA_SHADER_CACHE_MAX_SIZE").map(String::as_str),
+            Some("4G")
+        );
+        assert_eq!(
+            rt.env.get("MESA_SHADER_CACHE_DISABLE").map(String::as_str),
+            Some("true")
+        );
     }
 }

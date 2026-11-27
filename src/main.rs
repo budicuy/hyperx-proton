@@ -119,6 +119,7 @@ fn ensure_prefix_ready(
     )?;
 
     for key in [
+        "DXVK_SHADER_CACHE_PATH",
         "DXVK_STATE_CACHE_PATH",
         "VKD3D_SHADER_CACHE_PATH",
         "__GL_SHADER_DISK_CACHE_PATH",
