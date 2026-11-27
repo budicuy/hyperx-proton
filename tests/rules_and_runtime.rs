@@ -118,16 +118,16 @@ fn apply_ensure_files_creates_valid_flag_and_rejects_path_traversal() {
 
     let actions = vec![
         EnsureFileRule {
-            if_exists_rel: "ThirdParty/KrPcSdk_Global/KRSDKRes/KRSDKWebViewOSR/KRWebClient.exe".to_string(),
-            create_rel: "ThirdParty/KrPcSdk_Global/KRSDKRes/KRSDKWebViewOSR/usebitmap.flag".to_string(),
+            if_exists_rel: "ThirdParty/KrPcSdk_Global/KRSDKRes/KRSDKWebViewOSR/KRWebClient.exe".into(),
+            create_rel: "ThirdParty/KrPcSdk_Global/KRSDKRes/KRSDKWebViewOSR/usebitmap.flag".into(),
         },
         EnsureFileRule {
-            if_exists_rel: "ThirdParty/KrPcSdk_Global/KRSDKRes/KRSDKWebViewOSR/KRWebClient.exe".to_string(),
-            create_rel: "../escaped.flag".to_string(),
+            if_exists_rel: "ThirdParty/KrPcSdk_Global/KRSDKRes/KRSDKWebViewOSR/KRWebClient.exe".into(),
+            create_rel: "../escaped.flag".into(),
         },
         EnsureFileRule {
-            if_exists_rel: "ThirdParty/KrPcSdk_Global/KRSDKRes/KRSDKWebViewOSR/KRWebClient.exe".to_string(),
-            create_rel: tmp.path().join("abs.flag").display().to_string(),
+            if_exists_rel: "ThirdParty/KrPcSdk_Global/KRSDKRes/KRSDKWebViewOSR/KRWebClient.exe".into(),
+            create_rel: tmp.path().join("abs.flag"),
         },
     ];
 

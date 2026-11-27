@@ -3,11 +3,18 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Supported runner modes in `hyperx-native.json`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RunnerMode {
+    Native,
+}
+
 /// Manifest schema stored in `<runner_root>/hyperx-native.json`.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct HyperxNativeManifest {
-    pub schema_version: u32,
-    pub runner_mode: String,
+    pub schema_version: u8,
+    pub runner_mode: RunnerMode,
     pub requires_steamrt: bool,
     pub name: String,
     pub version: String,
@@ -45,13 +52,6 @@ pub fn load_manifest(runner_root: &Path) -> Result<HyperxNativeManifest, String>
         return Err(format!(
             "unsupported hyperx-native.json schema_version: {} (expected 1)",
             manifest.schema_version
-        ));
-    }
-    if manifest.runner_mode != "native" {
-        return Err(format!(
-            "invalid runner_mode {:?} in {} (expected \"native\")",
-            manifest.runner_mode,
-            manifest_path.display()
         ));
     }
     if manifest.requires_steamrt {

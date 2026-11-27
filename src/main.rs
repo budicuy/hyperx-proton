@@ -16,9 +16,9 @@ use std::process::{Command, ExitCode};
 
 /// Target soft `RLIMIT_NOFILE` ceiling so `WINEESYNC=1` does not hit `EMFILE`
 /// on distros that default to a 1024 soft file-descriptor limit.
-const TARGET_NOFILE_SOFT: u64 = 524_288;
+const TARGET_NOFILE_SOFT: libc::rlim_t = 524_288;
 
-fn raise_nofile_limit(target_soft: u64) -> Option<u64> {
+fn raise_nofile_limit(target_soft: libc::rlim_t) -> Option<libc::rlim_t> {
     let mut lim = libc::rlimit {
         rlim_cur: 0,
         rlim_max: 0,
@@ -234,6 +234,10 @@ fn run_launch(runner_root: &Path, wait_for_exit: bool, args: &[String]) -> Resul
     Ok(status.code().unwrap_or(1))
 }
 
+fn exit_code_from_i32(code: i32) -> ExitCode {
+    ExitCode::from((code & 0xff) as u8)
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
     let Some(verb) = args.first().map(String::as_str) else {
@@ -303,21 +307,21 @@ fn main() -> ExitCode {
             }
         },
         "waitforexitandrun" => match run_launch(&runner_root, true, &args[1..]) {
-            Ok(code) => ExitCode::from(u8::try_from(code).unwrap_or(1)),
+            Ok(code) => exit_code_from_i32(code),
             Err(err) => {
                 eprintln!("hyperx-proton: {err}");
                 ExitCode::from(1)
             }
         },
         "run" => match run_launch(&runner_root, false, &args[1..]) {
-            Ok(code) => ExitCode::from(u8::try_from(code).unwrap_or(1)),
+            Ok(code) => exit_code_from_i32(code),
             Err(err) => {
                 eprintln!("hyperx-proton: {err}");
                 ExitCode::from(1)
             }
         },
         "runinprefix" => match run_in_prefix(&runner_root, &args[1..]) {
-            Ok(code) => ExitCode::from(u8::try_from(code).unwrap_or(1)),
+            Ok(code) => exit_code_from_i32(code),
             Err(err) => {
                 eprintln!("hyperx-proton: {err}");
                 ExitCode::from(1)
@@ -327,5 +331,17 @@ fn main() -> ExitCode {
             eprintln!("hyperx-proton: unknown verb '{other}'");
             ExitCode::from(2)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exit_code_from_i32_preserves_low_8_bits() {
+        assert_eq!(exit_code_from_i32(0), ExitCode::from(0));
+        assert_eq!(exit_code_from_i32(258), ExitCode::from(2));
+        assert_eq!(exit_code_from_i32(-1), ExitCode::from(255));
     }
 }

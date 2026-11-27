@@ -34,8 +34,8 @@ pub struct RuleMatch {
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct EnsureFileRule {
-    pub if_exists_rel: String,
-    pub create_rel: String,
+    pub if_exists_rel: PathBuf,
+    pub create_rel: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,19 +79,20 @@ pub fn builtin_rules() -> Vec<GameRule> {
             use_steam_shim: Some(false),
             ensure_files: vec![
                 EnsureFileRule {
-                    if_exists_rel:
-                        "ThirdParty/KrPcSdk_Global/KRSDKRes/KRSDKWebViewOSR/KRWebClient.exe"
-                            .to_string(),
-                    create_rel:
-                        "ThirdParty/KrPcSdk_Global/KRSDKRes/KRSDKWebViewOSR/usebitmap.flag"
-                            .to_string(),
+                    if_exists_rel: PathBuf::from(
+                        "ThirdParty/KrPcSdk_Global/KRSDKRes/KRSDKWebViewOSR/KRWebClient.exe",
+                    ),
+                    create_rel: PathBuf::from(
+                        "ThirdParty/KrPcSdk_Global/KRSDKRes/KRSDKWebViewOSR/usebitmap.flag",
+                    ),
                 },
                 EnsureFileRule {
-                    if_exists_rel:
-                        "ThirdParty/KrPcSdk_CN/KRSDKRes/KRSDKWebViewOSR/KRWebClient.exe"
-                            .to_string(),
-                    create_rel: "ThirdParty/KrPcSdk_CN/KRSDKRes/KRSDKWebViewOSR/usebitmap.flag"
-                        .to_string(),
+                    if_exists_rel: PathBuf::from(
+                        "ThirdParty/KrPcSdk_CN/KRSDKRes/KRSDKWebViewOSR/KRWebClient.exe",
+                    ),
+                    create_rel: PathBuf::from(
+                        "ThirdParty/KrPcSdk_CN/KRSDKRes/KRSDKWebViewOSR/usebitmap.flag",
+                    ),
                 },
             ],
         },
@@ -369,13 +370,8 @@ pub fn should_use_steam_shim(
     eval.use_steam_shim.unwrap_or(false)
 }
 
-fn is_safe_relative_path(raw: &str) -> Option<&Path> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    let path = Path::new(trimmed);
-    if path.is_absolute() {
+fn is_safe_relative_path(path: &Path) -> Option<&Path> {
+    if path.as_os_str().is_empty() || path.is_absolute() {
         return None;
     }
     for comp in path.components() {

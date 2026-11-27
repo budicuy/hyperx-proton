@@ -3,10 +3,10 @@ use crate::rules::load_rules;
 use crate::runtime::{SyncMode, is_fsync_available, is_ntsync_available, resolve_sync_mode};
 use std::collections::BTreeMap;
 use std::ffi::{CStr, CString};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
-pub const MIN_GLIBC_VERSION: (u32, u32) = (2, 38);
+pub const MIN_GLIBC_VERSION: (u16, u16) = (2, 38);
 
 #[repr(C)]
 struct LinkMap {
@@ -38,10 +38,10 @@ pub struct DoctorCheck {
 }
 
 /// Parses a `major.minor[.patch]` glibc version string into `(major, minor)`.
-pub fn parse_glibc_version(raw: &str) -> Option<(u32, u32)> {
+pub fn parse_glibc_version(raw: &str) -> Option<(u16, u16)> {
     let mut parts = raw.trim().split('.');
-    let major = parts.next()?.parse::<u32>().ok()?;
-    let minor = parts.next()?.parse::<u32>().ok()?;
+    let major = parts.next()?.parse::<u16>().ok()?;
+    let minor = parts.next()?.parse::<u16>().ok()?;
     Some((major, minor))
 }
 
@@ -74,7 +74,7 @@ pub fn check_glibc_floor(raw: &str) -> DoctorCheck {
 
 /// Resolves a host shared library across any Linux distro's dynamic linker paths
 /// using `dlopen` + `dlinfo(RTLD_DI_LINKMAP)`.
-pub fn find_host_lib(lib_name: &str) -> Option<String> {
+pub fn find_host_lib(lib_name: &str) -> Option<PathBuf> {
     const RTLD_DI_LINKMAP: libc::c_int = 2;
     let c_name = CString::new(lib_name).ok()?;
     let handle = unsafe { libc::dlopen(c_name.as_ptr(), libc::RTLD_LAZY | libc::RTLD_LOCAL) };
@@ -111,7 +111,7 @@ pub fn find_host_lib(lib_name: &str) -> Option<String> {
     unsafe {
         libc::dlclose(handle);
     }
-    Some(resolved)
+    Some(PathBuf::from(resolved))
 }
 
 fn check_gst_plugin(plugin: &str) -> Result<(), String> {
@@ -270,7 +270,7 @@ pub fn run_doctor(runner_root: &Path) -> Vec<DoctorCheck> {
             Some(found) => checks.push(DoctorCheck {
                 name,
                 severity: CheckSeverity::Ok,
-                detail: found,
+                detail: found.display().to_string(),
             }),
             None => checks.push(DoctorCheck {
                 name,
