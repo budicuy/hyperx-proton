@@ -177,3 +177,41 @@ fn prune_foreign_runner_symlinks_cleans_old_proton_links_without_touching_user_f
     assert_eq!(fs::read_to_string(pfx.join("user.reg")).unwrap(), "KEEP_USER_REG");
     assert_eq!(fs::read_to_string(users.join("save.dat")).unwrap(), "KEEP_SAVE");
 }
+
+#[test]
+fn prefix_needs_wineboot_uses_fast_sentinel_check_on_warm_launch() {
+    use hyperx_proton::config::resolve_prefix_layout;
+    use hyperx_proton::prefix::prefix_needs_wineboot;
+    use std::os::unix::fs::symlink;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let runner = tmp.path().join("hyperx-runner");
+    let runner_ntdll = runner.join("files/lib/wine/x86_64-windows/ntdll.dll");
+    let foreign = tmp.path().join("GE-Proton11-14/files/lib/wine/x86_64-windows");
+    let compat = tmp.path().join("SHARED");
+    let layout = resolve_prefix_layout(Some(&compat), None).unwrap();
+    let sys32 = layout.wineprefix.join("drive_c/windows/system32");
+    let syswow64 = layout.wineprefix.join("drive_c/windows/syswow64");
+
+    fs::create_dir_all(runner_ntdll.parent().unwrap()).unwrap();
+    fs::create_dir_all(&foreign).unwrap();
+    fs::create_dir_all(&sys32).unwrap();
+    fs::create_dir_all(&syswow64).unwrap();
+
+    fs::write(&runner_ntdll, b"HYPERX").unwrap();
+    fs::write(foreign.join("ntdll.dll"), b"OLD_GE").unwrap();
+    fs::write(foreign.join("other_foreign.dll"), b"OLD_GE").unwrap();
+
+    fs::write(layout.wineprefix.join(".hyperx-proton-version"), "v1\n").unwrap();
+    fs::write(layout.wineprefix.join("system.reg"), "WINE REGISTRY").unwrap();
+
+    // Matching sentinel symlink + arbitrary non-sentinel symlink -> warm launch skips full scan
+    symlink(&runner_ntdll, sys32.join("ntdll.dll")).unwrap();
+    symlink(foreign.join("other_foreign.dll"), sys32.join("other_foreign.dll")).unwrap();
+    assert!(!prefix_needs_wineboot(&runner, &layout, "v1"));
+
+    // Foreign sentinel symlink -> triggers wineboot
+    fs::remove_file(sys32.join("ntdll.dll")).unwrap();
+    symlink(foreign.join("ntdll.dll"), sys32.join("ntdll.dll")).unwrap();
+    assert!(prefix_needs_wineboot(&runner, &layout, "v1"));
+}

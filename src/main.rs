@@ -117,6 +117,18 @@ fn ensure_prefix_ready(
         manifest_version,
         rt.nvapi_enabled,
     )?;
+
+    for key in [
+        "DXVK_STATE_CACHE_PATH",
+        "VKD3D_SHADER_CACHE_PATH",
+        "__GL_SHADER_DISK_CACHE_PATH",
+        "MESA_SHADER_CACHE_DIR",
+    ] {
+        if let Some(dir) = rt.env.get(key).filter(|s| !s.is_empty()) {
+            let _ = std::fs::create_dir_all(dir);
+        }
+    }
+
     Ok(())
 }
 

@@ -225,6 +225,34 @@ pub fn build_runtime_env_with_sync(
     env.entry("WINE_DISABLE_VULKAN_OPWR".to_string())
         .or_insert_with(|| "1".to_string());
 
+    // Pin GPU/DXVK/VKD3D shader caches under <compat_data>/shadercache (or
+    // STEAM_COMPAT_SHADER_PATH) unless the user/rule already specified an override.
+    let shader_root = env
+        .get("STEAM_COMPAT_SHADER_PATH")
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            layout
+                .compat_data_dir
+                .as_ref()
+                .map(|dir| dir.join("shadercache"))
+        });
+    if let Some(root) = shader_root {
+        env.entry("DXVK_STATE_CACHE_PATH".to_string())
+            .or_insert_with(|| root.join("dxvk").display().to_string());
+        env.entry("VKD3D_SHADER_CACHE_PATH".to_string())
+            .or_insert_with(|| root.join("vkd3d").display().to_string());
+        env.entry("__GL_SHADER_DISK_CACHE".to_string())
+            .or_insert_with(|| "1".to_string());
+        env.entry("__GL_SHADER_DISK_CACHE_SKIP_CLEANUP".to_string())
+            .or_insert_with(|| "1".to_string());
+        env.entry("__GL_SHADER_DISK_CACHE_PATH".to_string())
+            .or_insert_with(|| root.join("nvidia").display().to_string());
+        env.entry("MESA_SHADER_CACHE_DIR".to_string())
+            .or_insert_with(|| root.join("mesa").display().to_string());
+    }
+
     if is_env_enabled(&env, "PROTON_ENABLE_WAYLAND")
         && env.get("WAYLAND_DISPLAY").is_some_and(|v| !v.is_empty())
     {

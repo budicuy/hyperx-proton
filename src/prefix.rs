@@ -248,6 +248,21 @@ pub fn prune_foreign_runner_symlinks(runner_root: &Path, wineprefix: &Path) -> R
     Ok(removed)
 }
 
+/// Core Wine DLL symlinks checked on warm launches to detect a foreign runner
+/// without scanning thousands of files across `WINE_SYSTEM_DIRS`.
+const SENTINEL_SYMLINKS: &[&str] = &[
+    "drive_c/windows/system32/ntdll.dll",
+    "drive_c/windows/system32/kernel32.dll",
+    "drive_c/windows/syswow64/ntdll.dll",
+    "drive_c/windows/syswow64/kernel32.dll",
+];
+
+fn has_foreign_sentinel_symlinks(runner_root: &Path, wineprefix: &Path) -> bool {
+    SENTINEL_SYMLINKS
+        .iter()
+        .any(|rel| is_foreign_wine_symlink(runner_root, &wineprefix.join(rel)))
+}
+
 /// Returns true when the prefix needs `wineboot -u` before DLL deployment.
 pub fn prefix_needs_wineboot(
     runner_root: &Path,
@@ -262,7 +277,7 @@ pub fn prefix_needs_wineboot(
     let system_reg_missing = !layout.wineprefix.join("system.reg").is_file();
     version_changed
         || system_reg_missing
-        || has_foreign_runner_symlinks(runner_root, &layout.wineprefix)
+        || has_foreign_sentinel_symlinks(runner_root, &layout.wineprefix)
 }
 
 /// Non-destructively syncs DX11/DX12 (and opt-in NVAPI) DLLs into `system32`

@@ -164,8 +164,6 @@ fn runtime_env_stays_neutral_and_supports_nvapi_opt_in() {
         "DXVK_STATE_CACHE",
         "MESA_SHADER_CACHE_DISABLE",
         "MESA_SHADER_CACHE_MAX_SIZE",
-        "__GL_SHADER_DISK_CACHE",
-        "__GL_SHADER_DISK_CACHE_SKIP_CLEANUP",
         "__GL_SHADER_DISK_CACHE_SIZE",
         "DXVK_LOG_LEVEL",
         "VKD3D_DEBUG",
@@ -396,4 +394,57 @@ fn cli_launches_wuwa_without_steam_shim_and_hsr_with_steam_shim_and_doctor_repor
         .unwrap();
     let out = String::from_utf8_lossy(&doc.stdout);
     assert!(out.contains("rules:engine"), "doctor:\n{out}");
+}
+
+#[test]
+fn runtime_env_pins_shader_caches_and_respects_user_overrides() {
+    let runner = std::path::Path::new("/opt/hyperx-proton");
+    let layout = resolve_prefix_layout(Some(std::path::Path::new("/tmp/SHARED")), None).unwrap();
+
+    let rt_default = build_runtime_env_with_sync(
+        runner,
+        &layout,
+        &BTreeMap::new(),
+        true,
+        true,
+        &RuleEvaluation::default(),
+    );
+    assert_eq!(rt_default.env.get("DXVK_STATE_CACHE_PATH").map(String::as_str), Some("/tmp/SHARED/shadercache/dxvk"));
+    assert_eq!(rt_default.env.get("VKD3D_SHADER_CACHE_PATH").map(String::as_str), Some("/tmp/SHARED/shadercache/vkd3d"));
+    assert_eq!(rt_default.env.get("__GL_SHADER_DISK_CACHE").map(String::as_str), Some("1"));
+    assert_eq!(rt_default.env.get("__GL_SHADER_DISK_CACHE_SKIP_CLEANUP").map(String::as_str), Some("1"));
+    assert_eq!(rt_default.env.get("__GL_SHADER_DISK_CACHE_PATH").map(String::as_str), Some("/tmp/SHARED/shadercache/nvidia"));
+    assert_eq!(rt_default.env.get("MESA_SHADER_CACHE_DIR").map(String::as_str), Some("/tmp/SHARED/shadercache/mesa"));
+
+    let mut steam_shader_env = BTreeMap::new();
+    steam_shader_env.insert("STEAM_COMPAT_SHADER_PATH".to_string(), "/nvme/custom-shader".to_string());
+    let rt_steam = build_runtime_env_with_sync(
+        runner,
+        &layout,
+        &steam_shader_env,
+        true,
+        true,
+        &RuleEvaluation::default(),
+    );
+    assert_eq!(rt_steam.env.get("DXVK_STATE_CACHE_PATH").map(String::as_str), Some("/nvme/custom-shader/dxvk"));
+    assert_eq!(rt_steam.env.get("VKD3D_SHADER_CACHE_PATH").map(String::as_str), Some("/nvme/custom-shader/vkd3d"));
+    assert_eq!(rt_steam.env.get("__GL_SHADER_DISK_CACHE_PATH").map(String::as_str), Some("/nvme/custom-shader/nvidia"));
+    assert_eq!(rt_steam.env.get("MESA_SHADER_CACHE_DIR").map(String::as_str), Some("/nvme/custom-shader/mesa"));
+
+    let mut user_override_env = BTreeMap::new();
+    user_override_env.insert("DXVK_STATE_CACHE_PATH".to_string(), "/user/dxvk".to_string());
+    user_override_env.insert("__GL_SHADER_DISK_CACHE".to_string(), "0".to_string());
+    user_override_env.insert("MESA_SHADER_CACHE_DIR".to_string(), "/user/mesa".to_string());
+    let rt_override = build_runtime_env_with_sync(
+        runner,
+        &layout,
+        &user_override_env,
+        true,
+        true,
+        &RuleEvaluation::default(),
+    );
+    assert_eq!(rt_override.env.get("DXVK_STATE_CACHE_PATH").map(String::as_str), Some("/user/dxvk"));
+    assert_eq!(rt_override.env.get("__GL_SHADER_DISK_CACHE").map(String::as_str), Some("0"));
+    assert_eq!(rt_override.env.get("MESA_SHADER_CACHE_DIR").map(String::as_str), Some("/user/mesa"));
+    assert_eq!(rt_override.env.get("VKD3D_SHADER_CACHE_PATH").map(String::as_str), Some("/tmp/SHARED/shadercache/vkd3d"));
 }
